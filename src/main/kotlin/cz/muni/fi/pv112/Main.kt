@@ -10,25 +10,26 @@ import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWErrorCallback
 import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11.*
-import org.lwjgl.opengl.GL12.*
-import org.lwjgl.opengl.GL13.*
-import org.lwjgl.opengl.GL15.*
+import org.lwjgl.opengl.GL12.GL_BGR
+import org.lwjgl.opengl.GL12.GL_BGRA
+import org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER
+import org.lwjgl.opengl.GL15.GL_STATIC_DRAW
+import org.lwjgl.opengl.GL15.glBindBuffer
+import org.lwjgl.opengl.GL15.glBufferData
+import org.lwjgl.opengl.GL15.glGenBuffers
 import org.lwjgl.opengl.GL20.*
-import org.lwjgl.opengl.GL30.*
+import org.lwjgl.opengl.GL30.glBindVertexArray
+import org.lwjgl.opengl.GL30.glGenVertexArrays
 import org.lwjgl.system.MemoryStack.stackPush
 import org.lwjgl.system.MemoryUtil.NULL
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferByte
-import java.io.BufferedReader
 import java.io.IOException
-import java.io.InputStreamReader
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.imageio.ImageIO
 
-class Cv4 {
-
-    private var camera: Camera? = null
+class Main {
 
     // the window handle
     private var window: Long = 0
@@ -42,23 +43,17 @@ class Cv4 {
     private var animate = false
     private var t = 0f
 
-    // rendering mode
-    private var mode = GL_FILL
-
     // model
-    private var cube: ObjLoader? = null
+    private lateinit var torusObj: ObjLoader
 
     // our OpenGL resources
     private var axesBuffer: Int = 0
-    private var cubeBuffer: Int = 0
+    private var torusBuffer: Int = 0
     private var teapotBuffer: Int = 0
     private var axesArray: Int = 0
-    private var cubeArray: Int = 0
-    private val teapotArray: Int = 0
+    private var torusArray: Int = 0
 
     private var woodTexture: Int = 0
-    private val rocksTexture: Int = 0
-    private val diceTextures = IntArray(6)
 
     // our GLSL resources
     private var axesProgram: Int = 0
@@ -84,13 +79,14 @@ class Cv4 {
     private var eyePositionLoc: Int = 0
 
     private var woodTexLoc: Int = 0
-    private val rocksTexLoc: Int = 0
-    private val diceTexLoc: Int = 0
+
+    private val eyePosition = Vector3f(0.0f, 0.0f, -45.0f)
+//    private val eyePosition = Vector3f(0.0f, 30.0f, 0.0f)
+    private lateinit var projection: Matrix4f
+    private lateinit var view: Matrix4f
 
     fun run() {
         println("Hello LWJGL " + Version.getVersion() + "!")
-
-        camera = Camera()
 
         initGLFW()
         loop()
@@ -101,7 +97,7 @@ class Cv4 {
 
         // Terminate GLFW and free the error callback
         glfwTerminate()
-        glfwSetErrorCallback(null)!!.free()
+        glfwSetErrorCallback(null)?.free()
     }
 
     private fun initGLFW() {
@@ -121,78 +117,45 @@ class Cv4 {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3) // request the OpenGL 3.3 core profile context
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3)
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE)
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE)
+        if (System.getProperty("os.name").startsWith("Mac")) {
+            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE)
+        }
 
         // set initial width and height
-        width = 640
-        height = 480
+        width = 1280
+        height = 720
 
         // Create the window
-        window = glfwCreateWindow(width, height, "Hello World!", NULL, NULL)
+        window = glfwCreateWindow(width, height, "PV112 project - Maroš Šeleng, 422624", NULL, NULL)
         if (window == NULL) {
             throw RuntimeException("Failed to create the GLFW window")
         }
 
         // Setup a key callback. It will be called every time a key is pressed, repeated or released.
-        glfwSetKeyCallback(window) { window, key, scancode, action, mods ->
-            if (action == GLFW_RELEASE) {
-                when (key) {
-                    GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(
-                        window,
-                        true
-                    ) // We will detect this in the rendering loop
-                    GLFW_KEY_A -> animate = !animate
-                    GLFW_KEY_T -> {
-                    }
-                    GLFW_KEY_L -> mode = GL_LINE
-                    GLFW_KEY_F -> mode = GL_FILL
-                }// TODO toggle fullscreen
-            }
-        }
-
-        glfwSetMouseButtonCallback(window) { window, button, action, mods ->
-            if (action == GLFW_PRESS) {
-                if (button == GLFW_MOUSE_BUTTON_1) {
-                    camera!!.updateMouseButton(Camera.Button.LEFT, true)
-                } else if (button == GLFW_MOUSE_BUTTON_2) {
-                    camera!!.updateMouseButton(Camera.Button.RIGHT, true)
-                }
-            } else if (action == GLFW_RELEASE) {
-                if (button == GLFW_MOUSE_BUTTON_1) {
-                    camera!!.updateMouseButton(Camera.Button.LEFT, false)
-                } else if (button == GLFW_MOUSE_BUTTON_2) {
-                    camera!!.updateMouseButton(Camera.Button.RIGHT, false)
-                }
-            }
-        }
-
-        glfwSetCursorPosCallback(window) { window, xpos, ypos -> camera!!.updateMousePosition(xpos, ypos) }
-
-        // add window size callback
-        glfwSetWindowSizeCallback(window) { window, width, height ->
-            this.width = width
-            this.height = height
-            resized = true
-        }
+        glfwSetKeyCallback(window, ::keyCallback)
+        glfwSetMouseButtonCallback(window, ::mouseButtonCallback)
+        glfwSetCursorPosCallback(window, ::cursorPosCallback)
+        glfwSetWindowSizeCallback(window, ::windowSizeCallback)
 
         // Get the thread stack and push a new frame
-        stackPush().use({ stack ->
-                            val pWidth = stack.mallocInt(1) // int*
-                            val pHeight = stack.mallocInt(1) // int*
+        stackPush()
+            .use { stack ->
+                val pWidth = stack.mallocInt(1) // int*
+                val pHeight = stack.mallocInt(1) // int*
 
-                            // Get the window size passed to glfwCreateWindow
-                            glfwGetWindowSize(window, pWidth, pHeight)
+                // Get the window size passed to glfwCreateWindow
+                glfwGetWindowSize(window, pWidth, pHeight)
 
-                            // Get the resolution of the primary monitor
-                            val vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor())
+                // Get the resolution of the primary monitor
+                val vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor()) ?: return@use
 
-                            // Center the window
-                            glfwSetWindowPos(
-                                window,
-                                (vidmode!!.width() - pWidth.get(0)) / 2,
-                                (vidmode!!.height() - pHeight.get(0)) / 2
-                            )
-                        }) // the stack frame is popped automatically
+                // Center the window
+                glfwSetWindowPos(
+                    window,
+                    (vidmode.width() - pWidth.get(0)) / 2,
+                    (vidmode.height() - pHeight.get(0)) / 2
+                )
+            } // the stack frame is popped automatically
 
         // Make the OpenGL context current
         glfwMakeContextCurrent(window)
@@ -228,24 +191,17 @@ class Cv4 {
     }
 
     private fun init() {
+        projection = Matrix4f()
+            .perspective(java.lang.Math.toRadians(40.0).toFloat(), width / height.toFloat(), 1f, 1000f)
+        view = Matrix4f()
+            .lookAt(eyePosition, Vector3f(0f, 0f, 0f), Vector3f(0f, 1f, 0f))
+//            .lookAt(eyePosition, Vector3f(0f, 0f, 0f), Vector3f(0f, 0f, 1f))
+
         // empty scene color
-        // Task 10: set clear color to a brighter color (e.g., 0.15, 0.15, 0.15) so that we can better see the cube
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        glClearColor(0.15f, 0.15f, 0.15f, 1.0f)
         glLineWidth(3.0f) // makes lines thicker
 
-        // Task 9:  disable depth test in order to draw also occluded geometry
         glEnable(GL_DEPTH_TEST)
-
-
-        // Task 9:  enable blending using glEnable(GL_BLEND)
-        //          set blending function by glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        //              it will work like this: resultFrag = a * newFrag + (1-a) * oldFrag
-
-
-        // Task 10: enable face culling in order to draw back faces first and front faces afterwards
-        //             use glEnable(GL_CULL_FACE)
-
-
         // load GLSL program (vertex, fragment shaders) and textures
         try {
             axesProgram = loadProgram(
@@ -257,14 +213,9 @@ class Cv4 {
                 "/shaders/model.fs.glsl"
             )
 
-            // Task 1:  load wood.jpg texture using loadTexture("/resources/textures/wood.jpg"), store it to woodTexture variable
-            // Task 7:  load all dice1-6.png textures from "/resources/textures/dice1-6.png", store them to diceTextures array
-            // Task 8:  load rocks.jpg texture from "/resources/textures/rocks.jpg", store it to rocksTexture variable
-            woodTexture = loadTexture("/textures/wood.jpg")
-
-
+            woodTexture = loadTexture("/textures/earthmap1k.jpg")
         } catch (ex: IOException) {
-            Logger.getLogger(Cv4::class.java.name).log(Level.SEVERE, null, ex)
+            Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
         }
 
@@ -291,9 +242,6 @@ class Cv4 {
         materialSpecularColorLoc = glGetUniformLocation(modelProgram, "materialSpecularColor")
         materialShininessLoc = glGetUniformLocation(modelProgram, "materialShininess")
 
-        // Task 1:  get location of woodTex uniform using glGetUniformLocation(...), store it to woodTexLoc variable
-        // Task 7:  get location of diceTex uniform, store it to diceTexLoc
-        // Task 8:  get location of rocksTex uniform, store it to rocksTexLoc
         woodTexLoc = glGetUniformLocation(modelProgram, "woodTex")
 
 
@@ -301,7 +249,7 @@ class Cv4 {
         val buffers = IntArray(3)
         glGenBuffers(buffers)
         axesBuffer = buffers[0]
-        cubeBuffer = buffers[1]
+        torusBuffer = buffers[1]
         teapotBuffer = buffers[2]
 
         // fill a buffers with geometry
@@ -309,32 +257,32 @@ class Cv4 {
         glBufferData(GL_ARRAY_BUFFER, AXES, GL_STATIC_DRAW)
 
         // load teapot and fill buffer with teapot data
-        cube = ObjLoader("/models/cube.obj")
+        torusObj = ObjLoader("/models/torus.obj")
         try {
-            cube!!.load()
+            torusObj.load()
         } catch (ex: IOException) {
-            Logger.getLogger(Cv4::class.java.name).log(Level.SEVERE, null, ex)
+            Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
         }
 
-        val length = 3 * 8 * cube!!.triangleCount
-        val cubeData = BufferUtils.createFloatBuffer(length)
-        for (f in 0 until cube!!.triangleCount) {
-            val pi = cube!!.vertexIndices?.get(f)
-            val ni = cube!!.normalIndices?.get(f)
-            val ti = cube!!.texcoordIndices?.get(f)
+        val length = 3 * 8 * torusObj.triangleCount
+        val torusData = BufferUtils.createFloatBuffer(length)
+        for (f in 0 until torusObj.triangleCount) {
+            val pi = torusObj.vertexIndices?.get(f)
+            val ni = torusObj.normalIndices?.get(f)
+            val ti = torusObj.texcoordIndices?.get(f)
             for (i in 0..2) {
-                val position = cube!!.vertices?.get(pi?.get(i) ?: 0)
-                val normal = cube!!.normals?.get(ni?.get(i) ?: 0)
-                val texcoord = cube!!.texcoords?.get(ti?.get(i) ?: 0)
-                cubeData.put(position)
-                cubeData.put(normal)
-                cubeData.put(texcoord)
+                val position = torusObj.vertices?.get(pi?.get(i) ?: 0)
+                val normal = torusObj.normals?.get(ni?.get(i) ?: 0)
+                val texcoord = torusObj.texcoords?.get(ti?.get(i) ?: 0)
+                torusData.put(position)
+                torusData.put(normal)
+                torusData.put(texcoord)
             }
         }
-        cubeData.rewind()
-        glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
-        glBufferData(GL_ARRAY_BUFFER, cubeData, GL_STATIC_DRAW)
+        torusData.rewind()
+        glBindBuffer(GL_ARRAY_BUFFER, torusBuffer)
+        glBufferData(GL_ARRAY_BUFFER, torusData, GL_STATIC_DRAW)
 
         // clear buffer binding, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
@@ -343,7 +291,7 @@ class Cv4 {
         val arrays = IntArray(2)
         glGenVertexArrays(arrays)
         axesArray = arrays[0]
-        cubeArray = arrays[1]
+        torusArray = arrays[1]
 
         // get axes program attributes
         var positionAttribLoc = glGetAttribLocation(axesProgram, "position")
@@ -362,9 +310,8 @@ class Cv4 {
         val normalAttribLoc = glGetAttribLocation(modelProgram, "normal")
         val texcoordAttribLoc = glGetAttribLocation(modelProgram, "texcoord")
 
-        // bind teapot buffer
-        glBindVertexArray(cubeArray)
-        glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
+        glBindVertexArray(torusArray)
+        glBindBuffer(GL_ARRAY_BUFFER, torusBuffer)
         glEnableVertexAttribArray(positionAttribLoc)
         glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
         glEnableVertexAttribArray(normalAttribLoc)
@@ -375,6 +322,34 @@ class Cv4 {
         // clear bindings, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
+    }
+
+    private fun getYForDisc(n: Int, alpha: Float): Float {
+        return when (n) { // TODO
+//            1 -> 0.0f
+//            2 -> 1.85f
+//            else -> 1f +
+//                    sum(1, n-2) {
+//                        2 * Math.pow(alpha.toDouble(), it.toDouble()).toFloat()
+//                    } +
+//                    Math.pow(alpha.toDouble(), n - 1.0).toFloat()
+
+            1 -> 0f
+            2 -> 2f
+            3 -> 4f
+            4 -> 6f
+            5 -> 8f
+            6 -> 10f
+            7 -> 12f
+            8 -> 14f
+            else -> Float.MAX_VALUE
+        }
+    }
+
+    private fun sum(from: Int, to: Int, fnc: (Int) -> Float): Float {
+        return (from..to).fold(0.0f) { acc: Float, i: Int ->
+            acc + fnc(i)
+        }
     }
 
     private fun render() {
@@ -390,49 +365,56 @@ class Cv4 {
             t += 0.02f
         }
 
-        glPolygonMode(GL_FRONT_AND_BACK, mode)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
         glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
 
-        val projection = Matrix4f()
-            .perspective(Math.toRadians(60.0).toFloat(), width / height.toFloat(), 1f, 500f)
-
-        val view = Matrix4f()
-            .lookAt(camera!!.eyePosition!!, Vector3f(0f, 0f, 0f), Vector3f(0f, 1f, 0f))
-
-        // Task 7:  remove drawing of the whole cube at once
-        val mat = Material(Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), 45f)
-        drawModel(Matrix4f(), view, projection, cubeArray, cube!!.triangleCount * 3, mat)
-
-        // Task 7:  draw each side of the cube with a different dice (1-6 dots) texture
-        //          use second version of drawModel(...) which allows to specify an offset into VBO and the dice texture
-        // Task 10: draw only back faces first and only front faces afterwards, use glCullFace(GL_FRONT [or GL_BACK])
-        //              tip: draw the cube twice
-
-
+//        val mat = Material(Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), 45f)
+        val mat = Material(Vector3f(0f, 0.1f, 0.06f), Vector3f(0f, 0.50980392f, 0.50980392f), Vector3f(0.50196078f, 0.50196078f, 0.50196078f), 32f)
+        val redMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.5f, 0f, 0f), Vector3f(0.7f, 0.6f, 0.6f), 32f)
+        val glassMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.588235f, 0.670588f, 0.729412f), Vector3f(0.9f, 0.9f, 0.9f), 32f)
+        val materials = listOf(mat, redMat, glassMat)
+        repeat(3) {
+            val bla = (-20 + it * 20).toFloat()
+//            repeat(2) {
+//                val materiaaal = materials[it % 2]
+//                drawModel(
+//                    Matrix4f().translate(bla, (2 * it).toFloat() - 5f, 0f),
+//                    torusArray,
+//                    torusObj.triangleCount * 3,
+//                    materiaaal
+//                )
+//            }
+            repeat(8) {
+                val factor = 0.85
+                val scale = Math.pow(factor, it.toDouble())
+                val yTranslate = getYForDisc(it + 1, factor.toFloat())
+//                val yTranslate = it * 2.5f
+                val materiaaal = materials[it % 3]
+                drawModel(
+                    Matrix4f().translate(bla, yTranslate - 9f, 0f).scale(Vector3f(scale.toFloat(), 1f, scale.toFloat())),
+                    torusArray,
+                    torusObj.triangleCount * 3,
+                    materiaaal)
+            }
+        }
     }
 
     private fun drawModel(
         model: Matrix4f,
-        view: Matrix4f,
-        projection: Matrix4f,
         vao: Int,
         count: Int,
-        material: Material
-    ) {
-        drawModel(model, view, projection, vao, 0, count, material, 0)
+        material: Material) {
+        drawModel(model, vao, 0, count, material, 0)
     }
 
     private fun drawModel(
         model: Matrix4f,
-        view: Matrix4f,
-        projection: Matrix4f,
         vao: Int,
         offset: Int,
         count: Int,
         material: Material?,
-        diceTexture: Int
-    ) {
+        diceTexture: Int) {
         // compute model-view-projection matrix
         val mvp = Matrix4f(projection)
             .mul(view)
@@ -446,12 +428,12 @@ class Cv4 {
         glUseProgram(modelProgram)
         glBindVertexArray(vao) // bind vertex array to draw
 
-        glUniform4f(lightPositionLoc, 2f, 5f, 3f, 1f)
+        glUniform4f(lightPositionLoc, 0f, 45f, 0f, 0f)
         glUniform3f(lightAmbientColorLoc, 0.3f, 0.3f, 0.3f)
         glUniform3f(lightDiffuseColorLoc, 1f, 1f, 1f)
         glUniform3f(lightSpecularColorLoc, 1f, 1f, 1f)
 
-        glUniform3f(eyePositionLoc, camera!!.eyePosition!!.x, camera!!.eyePosition!!.y, camera!!.eyePosition!!.z)
+        glUniform3f(eyePositionLoc, eyePosition.x, eyePosition.y, eyePosition.z)
 
         if (material != null) {
             glUniform3f(
@@ -475,20 +457,9 @@ class Cv4 {
             glUniform1f(materialShininessLoc, material.shininess)
         }
 
-        // Task 1:  set active texture to texture unit (TU) 0 using glActiveTexture(GL_TEXTURE0)
-        //          bind woodTexture to TU 0 using glBindTexture(GL_TEXTURE_2D, woodTexture)
-        //          assign TU 0 to woodTex sampler in GLSL program using glUniform1i(woodTexLoc, 0)
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, woodTexture)
-        glUniform1i(woodTexLoc, 0)
-
-
-        // Task 7:  set active texture to texture unit (TU) 1 using glActiveTexture(GL_TEXTURE1)
-        //          bind diceTexture to TU 1 using glBindTexture(GL_TEXTURE_2D, diceTexture)
-        //          assign TU 1 to diceTex sampler in GLSL program using glUniform1i(diceTexLoc, 1)
-        // Task 8:  set active texture to texture unit (TU) 2 using glActiveTexture(GL_TEXTURE2)
-        //          bind rocksTexture to TU 2 using glBindTexture(GL_TEXTURE_2D, rocksTexture)
-        //          assign TU 2 to rocksTex sampler in GLSL program using glUniform1i(rocksTexLoc, 2)
+//        glActiveTexture(GL_TEXTURE0)
+//        glBindTexture(GL_TEXTURE_2D, woodTexture)
+//        glUniform1i(woodTexLoc, 0)
 
 
         val mvpData = BufferUtils.createFloatBuffer(16)
@@ -503,30 +474,13 @@ class Cv4 {
 
         glDrawArrays(GL_TRIANGLES, offset, count)
 
-        glBindTexture(GL_TEXTURE_2D, 0)
+//        glBindTexture(GL_TEXTURE_2D, 0)
         glBindVertexArray(0)
         glUseProgram(0)
     }
 
-    private fun drawAxes(modelViewProjection: Matrix4f, length: Float) {
-        glUseProgram(axesProgram)
-        glBindVertexArray(axesArray)
-
-        val mvpData = BufferUtils.createFloatBuffer(16)
-        modelViewProjection.get(mvpData)
-        glUniform1f(axesLengthUniformLoc, length)
-        glUniform1f(axesAspectUniformLoc, width / height.toFloat())
-        glUniformMatrix4fv(axesMvpUniformLoc, false, mvpData)
-
-        glDrawArrays(GL_LINES, 0, 6)
-
-        glBindVertexArray(0)
-        glUseProgram(0)
-    }
-
-    @Throws(IOException::class)
     private fun loadTexture(filename: String): Int {
-        val image = ImageIO.read(Cv4::class.java.getResourceAsStream(filename))
+        val image = ImageIO.read(Main::class.java.getResourceAsStream(filename))
         var pixels = (image.raster.dataBuffer as DataBufferByte).data
 
         val internalFormat: Int
@@ -557,7 +511,7 @@ class Cv4 {
         // Task 3:  generate mipmap levels using glGenerateMipmap(GL_TEXTURE_2D)
         texture = glGenTextures()
         glBindTexture(GL_TEXTURE_2D, texture)
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 256, 256, 0, format, GL_UNSIGNED_BYTE, textureData)
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 1000, 500, 0, format, GL_UNSIGNED_BYTE, textureData)
 
         // Task 1:  set texture filtering using glTexParameteri(...) to GL_NEAREST
         //              minification filter: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
@@ -570,13 +524,53 @@ class Cv4 {
         //              S direction: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
         //              T direction: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
         //              also try other modes, listed in the attached PDF :)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
 
         // unbind texture
         glBindTexture(GL_TEXTURE_2D, 0)
 
         return texture
+    }
+
+    private fun keyCallback(window: Long, key: Int, scancode: Int, action: Int, mods: Int) {
+        if (action == GLFW_RELEASE) {
+            when (key) {
+                GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(
+                    window,
+                    true
+                ) // We will detect this in the rendering loop
+                GLFW_KEY_A -> animate = !animate
+                GLFW_KEY_T -> {
+                }
+            }// TODO toggle fullscreen
+        }
+    }
+
+    private fun mouseButtonCallback(window: Long, button: Int, action: Int, mods: Int) {
+//        if (action == GLFW_PRESS) {
+//            if (button == GLFW_MOUSE_BUTTON_1) {
+//                camera.updateMouseButton(Camera.Button.LEFT, true)
+//            } else if (button == GLFW_MOUSE_BUTTON_2) {
+//                camera.updateMouseButton(Camera.Button.RIGHT, true)
+//            }
+//        } else if (action == GLFW_RELEASE) {
+//            if (button == GLFW_MOUSE_BUTTON_1) {
+//                camera.updateMouseButton(Camera.Button.LEFT, false)
+//            } else if (button == GLFW_MOUSE_BUTTON_2) {
+//                camera.updateMouseButton(Camera.Button.RIGHT, false)
+//            }
+//        }
+    }
+
+    private fun cursorPosCallback(window: Long, xpos: Double, ypos: Double) {
+//        camera.updateMousePosition(xpos, ypos)
+    }
+
+    private fun windowSizeCallback(window: Long, width: Int, height: Int) {
+        this.width = width
+        this.height = height
+        resized = true
     }
 
     private fun toBGRA(abgr: ByteArray): ByteArray {
@@ -592,26 +586,6 @@ class Cv4 {
         return bgra
     }
 
-    @Throws(IOException::class)
-    private fun loadShader(filename: String, shaderType: Int): Int {
-        val source = readAllFromResource(filename)
-        val shader = glCreateShader(shaderType)
-
-        // create and compile GLSL shader
-        glShaderSource(shader, source)
-        glCompileShader(shader)
-
-        // check GLSL shader compile status
-        val status = glGetShaderi(shader, GL_COMPILE_STATUS)
-        if (status == GL_FALSE) {
-            val log = glGetShaderInfoLog(shader)
-            System.err.println(log)
-        }
-
-        return shader
-    }
-
-    @Throws(IOException::class)
     private fun loadProgram(vertexShaderFile: String, fragmentShaderFile: String): Int {
         // load vertex and fragment shaders (GLSL)
         val vs = loadShader(vertexShaderFile, GL_VERTEX_SHADER)
@@ -632,27 +606,34 @@ class Cv4 {
         return program
     }
 
-    @Throws(IOException::class)
-    private fun readAllFromResource(resource: String): String {
-        val `is` = Cv4::class.java.getResourceAsStream(resource) ?: throw IOException("Resource not found: $resource")
+    private fun loadShader(filename: String, shaderType: Int): Int {
+        val source = readAllFromResource(filename)
+        val shader = glCreateShader(shaderType)
 
-        val reader = BufferedReader(InputStreamReader(`is`))
-        val sb = StringBuilder()
+        // create and compile GLSL shader
+        glShaderSource(shader, source)
+        glCompileShader(shader)
 
-        var c = reader.read()
-        while (c != -1) {
-            sb.append(c.toChar())
-            c = reader.read()
+        // check GLSL shader compile status
+        val status = glGetShaderi(shader, GL_COMPILE_STATUS)
+        if (status == GL_FALSE) {
+            val log = glGetShaderInfoLog(shader)
+            System.err.println(log)
         }
 
-        return sb.toString()
+        return shader
+    }
+
+    private fun readAllFromResource(resource: String): String {
+        return (javaClass.getResourceAsStream(resource) ?: throw IOException("Resource not found: $resource"))
+            .bufferedReader()
+            .lineSequence()
+            .joinToString(separator = "\n")
     }
 
     companion object {
-
-        private val SIZEOF_AXES_VERTEX = 6 * java.lang.Float.BYTES
-        private val COLOR_OFFSET = 3 * java.lang.Float.BYTES
-
+        private const val SIZEOF_AXES_VERTEX = 6 * java.lang.Float.BYTES
+        private const val COLOR_OFFSET = 3 * java.lang.Float.BYTES
         private val AXES = floatArrayOf(
             // .. position .......... color ....
             // x axis
@@ -663,13 +644,13 @@ class Cv4 {
             0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f
         )
 
-        private val SIZEOF_MODEL_VERTEX = 8 * java.lang.Float.BYTES
-        private val NORMAL_OFFSET = 3 * java.lang.Float.BYTES
-        private val TEXCOORD_OFFSET = 6 * java.lang.Float.BYTES
+        private const val SIZEOF_MODEL_VERTEX = 8 * java.lang.Float.BYTES
+        private const val NORMAL_OFFSET = 3 * java.lang.Float.BYTES
+        private const val TEXCOORD_OFFSET = 6 * java.lang.Float.BYTES
     }
 }
 
 fun main(args: Array<String>) {
-    Cv4().run()
+    Main().run()
 }
 
