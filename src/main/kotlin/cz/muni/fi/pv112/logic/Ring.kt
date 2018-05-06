@@ -8,7 +8,7 @@ data class Ring(val radius: Int) {
 }
 
 class Stick(private val numOfRings: Int = 8) {
-    private val rings = LinkedList<Ring>()
+    val rings = LinkedList<Ring>()
 
     /**
      * Returns the [Ring] that is on the top of the stick, but does not remove it
@@ -64,18 +64,28 @@ class Stick(private val numOfRings: Int = 8) {
         }
         return result
     }
+
+    fun deepCopy(): Stick {
+        val newStick = Stick(numOfRings)
+        rings.reversed().forEach {
+            newStick.push(it.copy())
+        }
+        return newStick
+    }
 }
 
 data class HanoiTowers(val numOfDisks: Int = 8) {
     var strategy: Strategy = Strategy.LEFT_RIGHT
         private set
-    private val sticks: Map<Position, Stick>
+    val sticks: Map<Position, Stick>
     private var stepsDone = 1
+    var lastStep: Pair<Position, Position>? = null
+        private set
 
     init {
         val startingStick = Stick(numOfDisks)
         repeat(numOfDisks) {
-            startingStick.push(Ring(numOfDisks - it + 1))
+            startingStick.push(Ring(numOfDisks - it))
         }
         val leftStick = when (strategy) {
             Strategy.LEFT_RIGHT -> startingStick
@@ -170,6 +180,7 @@ data class HanoiTowers(val numOfDisks: Int = 8) {
         println()
         println("Moving ring from $from to $to:")
         println(this)
+        lastStep = Pair(from, to)
 
         return result
     }

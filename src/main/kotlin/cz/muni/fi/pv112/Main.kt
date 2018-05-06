@@ -1,5 +1,13 @@
 package cz.muni.fi.pv112
 
+import cz.muni.fi.pv112.cache.UACache
+import cz.muni.fi.pv112.cache.UAName
+import cz.muni.fi.pv112.cache.UAName.*
+import cz.muni.fi.pv112.logic.HanoiTowers
+import cz.muni.fi.pv112.logic.Position
+import cz.muni.fi.pv112.logic.Stick
+import cz.muni.fi.pv112.model.BaseModel
+import cz.muni.fi.pv112.model.ObjModel
 import org.joml.Matrix3f
 import org.joml.Matrix4f
 import org.joml.Vector3f
@@ -29,8 +37,27 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import javax.imageio.ImageIO
 
-class Main {
+sealed class AnimationPhase {
+    class NoAnimation : AnimationPhase()
+    class Up(val x: Float, val startY: Float, val endY: Float) : AnimationPhase()
+    class Rotation(val centerX: Float, val centerY: Float, val radius: Float) : AnimationPhase()
+    class Down(val x: Float, val startY: Float, val endY: Float) : AnimationPhase()
+}
 
+typealias StepAnimating = Pair<Position, Position>
+fun StepAnimating.isLeftToRight(): Boolean {
+    return first == Position.LEFT || (first == Position.CENTER && second == Position.RIGHT)
+}
+fun StepAnimating.isSmallStep(): Boolean {
+    return Math.abs(first.ordinal - second.ordinal) == 1
+}
+
+/**
+ * TODO: for the game to be playable: save user's step from the last known state, in other words with every step, save it and compare with some known state,
+ * if the state is recognized (we have it in the "official" solution), set the new "last-known-good-step" pointer to point to it
+ * TODO: pre-generate steps for all possible user strategies (LR, LC, CR, CL, RL, RC)
+ */
+class Main {
     // the window handle
     private var window: Long = 0
 
@@ -40,50 +67,50 @@ class Main {
     private var resized = false
 
     // animation
-    private var animate = false
-    private var t = 0f
+    private var frameCounter = 0
+    private var stepAnimating: StepAnimating? = null
+    private val animationsLocked: Boolean
+        get() = stepAnimating != null
+
+
+    private var nextAnimation: AnimationPhase = AnimationPhase.NoAnimation()
+
+
+    private var rotationStartedFrame: Int? = null
+    private var rotationEndedFrame: Int? = null
 
     // model
-    private lateinit var torusObj: ObjLoader
+    private lateinit var torusObj: Obj
 
     // our OpenGL resources
-    private var axesBuffer: Int = 0
     private var torusBuffer: Int = 0
-    private var teapotBuffer: Int = 0
-    private var axesArray: Int = 0
     private var torusArray: Int = 0
 
     private var woodTexture: Int = 0
 
-    // our GLSL resources
-    private var axesProgram: Int = 0
-    private var axesAspectUniformLoc: Int = 0
-    private var axesLengthUniformLoc: Int = 0
-    private var axesMvpUniformLoc: Int = 0
+    private lateinit var cache: UACache
 
     private var modelProgram: Int = 0
-    private var modelMvpLoc: Int = 0
-    private var modelNLoc: Int = 0
-    private var modelModelLoc: Int = 0
 
-    private var lightPositionLoc: Int = 0
-    private var lightAmbientColorLoc: Int = 0
-    private var lightDiffuseColorLoc: Int = 0
-    private var lightSpecularColorLoc: Int = 0
-
-    private var materialAmbientColorLoc: Int = 0
-    private var materialDiffuseColorLoc: Int = 0
-    private var materialSpecularColorLoc: Int = 0
-    private var materialShininessLoc: Int = 0
-
-    private var eyePositionLoc: Int = 0
-
-    private var woodTexLoc: Int = 0
-
-    private val eyePosition = Vector3f(0.0f, 0.0f, -45.0f)
-//    private val eyePosition = Vector3f(0.0f, 30.0f, 0.0f)
+    private val eyePosition = Vector3f(0.0f, 12.0f, 45.0f)
     private lateinit var projection: Matrix4f
     private lateinit var view: Matrix4f
+
+    private lateinit var modelsToDraw: List<BaseModel>
+
+    // game related stuff
+    private val numOfDiscs = 8
+    private lateinit var game: HanoiTowers
+    private val stickDistance = 15f
+    private val frameSpeed: Float
+        get() = (Math.PI * stickDistance / 180).toFloat()
+
+    private var yTranslation = 0f
+    private var rotationAngleDegrees = 0.0
+
+
+    private val maxY = 15f
+
 
     fun run() {
         println("Hello LWJGL " + Version.getVersion() + "!")
@@ -179,7 +206,21 @@ class Main {
 
         // Run the rendering loop until the user has attempted to close
         // the window or has pressed the ESCAPE key.
+        var lastTime = glfwGetTime()
+        var nbFrames = 0
         while (!glfwWindowShouldClose(window)) {
+
+            // Measure speed
+            val currentTime = glfwGetTime()
+            nbFrames++
+            if ( currentTime - lastTime >= 1.0 ){ // If last prinf() was more than 1 sec ago
+//                println("$nbFrames FPS (${1000.0/nbFrames.toDouble()} ms/frame)")
+                nbFrames = 0
+                lastTime += 1.0
+            }
+
+            frameCounter++
+
             render()
 
             glfwSwapBuffers(window) // swap the color buffers
@@ -192,22 +233,18 @@ class Main {
 
     private fun init() {
         projection = Matrix4f()
-            .perspective(java.lang.Math.toRadians(40.0).toFloat(), width / height.toFloat(), 1f, 1000f)
+            .perspective(java.lang.Math.toRadians(50.0).toFloat(), width / height.toFloat(), 1f, 1000f)
         view = Matrix4f()
-            .lookAt(eyePosition, Vector3f(0f, 0f, 0f), Vector3f(0f, 1f, 0f))
-//            .lookAt(eyePosition, Vector3f(0f, 0f, 0f), Vector3f(0f, 0f, 1f))
+            .lookAt(eyePosition, Vector3f(0f, 12f, 0f), Vector3f(0f, 1f, 0f))
 
         // empty scene color
         glClearColor(0.15f, 0.15f, 0.15f, 1.0f)
         glLineWidth(3.0f) // makes lines thicker
 
         glEnable(GL_DEPTH_TEST)
-        // load GLSL program (vertex, fragment shaders) and textures
+
+
         try {
-            axesProgram = loadProgram(
-                "/shaders/axes.vs.glsl",
-                "/shaders/axes.fs.glsl"
-            )
             modelProgram = loadProgram(
                 "/shaders/model.vs.glsl",
                 "/shaders/model.fs.glsl"
@@ -219,45 +256,14 @@ class Main {
             System.exit(1)
         }
 
-        // get uniform locations
-        // axes program uniforms
-        axesAspectUniformLoc = glGetUniformLocation(axesProgram, "aspect")
-        axesLengthUniformLoc = glGetUniformLocation(axesProgram, "len")
-        axesMvpUniformLoc = glGetUniformLocation(axesProgram, "MVP")
-
-        // model program uniforms
-        modelMvpLoc = glGetUniformLocation(modelProgram, "MVP")
-        modelNLoc = glGetUniformLocation(modelProgram, "N")
-        modelModelLoc = glGetUniformLocation(modelProgram, "model")
-
-        lightPositionLoc = glGetUniformLocation(modelProgram, "lightPosition")
-        lightAmbientColorLoc = glGetUniformLocation(modelProgram, "lightAmbientColor")
-        lightDiffuseColorLoc = glGetUniformLocation(modelProgram, "lightDiffuseColor")
-        lightSpecularColorLoc = glGetUniformLocation(modelProgram, "lightSpecularColor")
-
-        eyePositionLoc = glGetUniformLocation(modelProgram, "eyePosition")
-
-        materialAmbientColorLoc = glGetUniformLocation(modelProgram, "materialAmbientColor")
-        materialDiffuseColorLoc = glGetUniformLocation(modelProgram, "materialDiffuseColor")
-        materialSpecularColorLoc = glGetUniformLocation(modelProgram, "materialSpecularColor")
-        materialShininessLoc = glGetUniformLocation(modelProgram, "materialShininess")
-
-        woodTexLoc = glGetUniformLocation(modelProgram, "woodTex")
-
+        initCache()
 
         // create buffers with geometry
-        val buffers = IntArray(3)
+        val buffers = IntArray(1)
         glGenBuffers(buffers)
-        axesBuffer = buffers[0]
-        torusBuffer = buffers[1]
-        teapotBuffer = buffers[2]
+        torusBuffer = buffers[0]
 
-        // fill a buffers with geometry
-        glBindBuffer(GL_ARRAY_BUFFER, axesBuffer)
-        glBufferData(GL_ARRAY_BUFFER, AXES, GL_STATIC_DRAW)
-
-        // load teapot and fill buffer with teapot data
-        torusObj = ObjLoader("/models/torus.obj")
+        torusObj = Obj("/models/torus.obj")
         try {
             torusObj.load()
         } catch (ex: IOException) {
@@ -268,13 +274,13 @@ class Main {
         val length = 3 * 8 * torusObj.triangleCount
         val torusData = BufferUtils.createFloatBuffer(length)
         for (f in 0 until torusObj.triangleCount) {
-            val pi = torusObj.vertexIndices?.get(f)
-            val ni = torusObj.normalIndices?.get(f)
-            val ti = torusObj.texcoordIndices?.get(f)
+            val pi = torusObj.vertexIndices[f]
+            val ni = torusObj.normalIndices[f]
+            val ti = torusObj.texcoordIndices[f]
             for (i in 0..2) {
-                val position = torusObj.vertices?.get(pi?.get(i) ?: 0)
-                val normal = torusObj.normals?.get(ni?.get(i) ?: 0)
-                val texcoord = torusObj.texcoords?.get(ti?.get(i) ?: 0)
+                val position = torusObj.vertices[pi[i]]
+                val normal = torusObj.normals[ni[i]]
+                val texcoord = torusObj.texcoords[ti[i]]
                 torusData.put(position)
                 torusData.put(normal)
                 torusData.put(texcoord)
@@ -288,28 +294,16 @@ class Main {
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
         // create a vertex array object for the geometry
-        val arrays = IntArray(2)
+        val arrays = IntArray(1)
         glGenVertexArrays(arrays)
-        axesArray = arrays[0]
-        torusArray = arrays[1]
-
-        // get axes program attributes
-        var positionAttribLoc = glGetAttribLocation(axesProgram, "position")
-        val colorAttribLoc = glGetAttribLocation(axesProgram, "color")
-        // bind axes buffer
-        glBindVertexArray(axesArray)
-        glBindBuffer(GL_ARRAY_BUFFER, axesBuffer)
-        // stride and offset are employed as both position and color data reside in the same vertex buffer
-        glEnableVertexAttribArray(positionAttribLoc)
-        glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_AXES_VERTEX, 0)
-        glEnableVertexAttribArray(colorAttribLoc)
-        glVertexAttribPointer(colorAttribLoc, 3, GL_FLOAT, false, SIZEOF_AXES_VERTEX, COLOR_OFFSET.toLong())
+        torusArray = arrays[0]
 
         // get cube program attributes
-        positionAttribLoc = glGetAttribLocation(modelProgram, "position")
-        val normalAttribLoc = glGetAttribLocation(modelProgram, "normal")
-        val texcoordAttribLoc = glGetAttribLocation(modelProgram, "texcoord")
+        val positionAttribLoc = cache[POSITION]
+        val normalAttribLoc = cache[NORMAL]
+        val texcoordAttribLoc = cache[TEXCOORD]
 
+        // TODO wtf?
         glBindVertexArray(torusArray)
         glBindBuffer(GL_ARRAY_BUFFER, torusBuffer)
         glEnableVertexAttribArray(positionAttribLoc)
@@ -322,34 +316,18 @@ class Main {
         // clear bindings, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
+
+        initGame()
     }
 
-    private fun getYForDisc(n: Int, alpha: Float): Float {
-        return when (n) { // TODO
-//            1 -> 0.0f
-//            2 -> 1.85f
-//            else -> 1f +
-//                    sum(1, n-2) {
-//                        2 * Math.pow(alpha.toDouble(), it.toDouble()).toFloat()
-//                    } +
-//                    Math.pow(alpha.toDouble(), n - 1.0).toFloat()
-
-            1 -> 0f
-            2 -> 2f
-            3 -> 4f
-            4 -> 6f
-            5 -> 8f
-            6 -> 10f
-            7 -> 12f
-            8 -> 14f
-            else -> Float.MAX_VALUE
+    private fun initCache() {
+        cache = UACache(modelProgram).apply {
+            cache(*UAName.values())
         }
     }
 
-    private fun sum(from: Int, to: Int, fnc: (Int) -> Float): Float {
-        return (from..to).fold(0.0f) { acc: Float, i: Int ->
-            acc + fnc(i)
-        }
+    private fun initGame() {
+        game = HanoiTowers(numOfDiscs)
     }
 
     private fun render() {
@@ -360,52 +338,225 @@ class Main {
             resized = false
         }
 
-        // animate variables
-        if (animate) {
-            t += 0.02f
+        if (!animationsLocked) {
+            game.step()
+            stepAnimating = game.lastStep
         }
 
+//        TODO    t += 0.02f
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
-
         glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
+        prepareModels()
+        drawModels()
+    }
 
+    private fun prepareModels() {
+        val result = mutableListOf<BaseModel>()
 //        val mat = Material(Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), 45f)
         val mat = Material(Vector3f(0f, 0.1f, 0.06f), Vector3f(0f, 0.50980392f, 0.50980392f), Vector3f(0.50196078f, 0.50196078f, 0.50196078f), 32f)
         val redMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.5f, 0f, 0f), Vector3f(0.7f, 0.6f, 0.6f), 32f)
         val glassMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.588235f, 0.670588f, 0.729412f), Vector3f(0.9f, 0.9f, 0.9f), 32f)
         val materials = listOf(mat, redMat, glassMat)
-        repeat(3) {
-            val bla = (-20 + it * 20).toFloat()
-//            repeat(2) {
-//                val materiaaal = materials[it % 2]
-//                drawModel(
-//                    Matrix4f().translate(bla, (2 * it).toFloat() - 5f, 0f),
-//                    torusArray,
-//                    torusObj.triangleCount * 3,
-//                    materiaaal
-//                )
-//            }
-            repeat(8) {
-                val factor = 0.85
-                val scale = Math.pow(factor, it.toDouble())
-                val yTranslate = getYForDisc(it + 1, factor.toFloat())
-//                val yTranslate = it * 2.5f
-                val materiaaal = materials[it % 3]
-                drawModel(
-                    Matrix4f().translate(bla, yTranslate - 9f, 0f).scale(Vector3f(scale.toFloat(), 1f, scale.toFloat())),
-                    torusArray,
-                    torusObj.triangleCount * 3,
-                    materiaaal)
+        val factor = 0.88
+
+        for ((position, stick) in game.sticks) {
+            val staticRings = if (animationsLocked && (position == stepAnimating?.second)) {
+                stick.rings.drop(1)
+            } else {
+                stick.rings
+            }
+
+            val dynamicRing = if (animationsLocked && position == stepAnimating?.second) {
+                stick.rings.firstOrNull()
+            } else {
+                null
+            }
+
+            // Add static rings
+            staticRings.reversed().forEachIndexed { index, ring ->
+                val scale = Math.pow(factor, numOfDiscs - ring.radius.toDouble())
+                val yTranslate = getYForRingOnStick(index, stick, factor)
+                val materiaaal = materials[index % 3]
+
+                result.add(
+                    ObjModel(
+                        obj = torusObj,
+                        model = Matrix4f()
+                            .translate(getTranslationX(position), yTranslate, 0f)
+                            .scale(scale.toFloat()),
+                        vao = torusArray,
+                        material = materiaaal,
+                        texture = null))
+            }
+
+            if (dynamicRing != null) {
+                val scale = Math.pow(factor, numOfDiscs - dynamicRing.radius.toDouble())
+                if (yTranslation < maxY && rotationStartedFrame == null) {
+                    // MOVE UP
+                    if (yTranslation <= 0) {
+//                        yTranslation = getYForRingOnStick(stick.rings.lastIndex, stick, factor)
+                        val startingStick = game.sticks[stepAnimating?.first]?.deepCopy()
+                        startingStick?.push(dynamicRing.copy())
+                        yTranslation = getYForRingOnStick(startingStick?.rings?.lastIndex ?: 7, startingStick ?: stick, factor)
+                    }
+                    yTranslation = increaseUntil(yTranslation, frameSpeed, maxY)
+                } else if (rotationEndedFrame == null) {
+                    // ROTATE
+                    if (rotationStartedFrame == null) {
+                        rotationStartedFrame = frameCounter
+                    }
+                    val diff = (rotationStartedFrame ?: 0) - frameCounter
+                    rotationAngleDegrees = if (diff > -180) {
+                        diff.toDouble()
+                    } else {
+                        rotationEndedFrame = frameCounter
+                        180.0
+                    }
+                } else if (yTranslation > getYForRingOnStick(stick.rings.lastIndex, stick, factor)) {
+                    // MOVING DOWN
+                    yTranslation = decreaseUntil(yTranslation, frameSpeed, getYForRingOnStick(stick.rings.lastIndex, stick, factor))
+                } else {
+                    // ANIMATION DONE, RESETTING
+                    // TODO: this is causing that 1 frame blink in the end of animation
+                    if (yTranslation <= getYForRingOnStick(stick.rings.lastIndex, stick, factor)) {
+                        stepAnimating = null
+                        yTranslation = 0f
+                        rotationStartedFrame = null
+                        rotationEndedFrame = null
+                        rotationAngleDegrees = 0.0
+                    }
+                }
+
+                val materiaaal = materials[stick.rings.lastIndex % 3]
+
+                result.add(
+                    ObjModel(
+                        obj = torusObj,
+                        model = Matrix4f()
+                            .translate(getCenterOfRotationX(), yTranslation, 0f)
+                            .rotate(Math.toRadians(rotationAngleDegrees * getRotationAngleFactor()).toFloat(), 0f, 0f, 1f)
+                            .translate(getRadiusOfRotationX(), 0f, 0f)
+                            .scale(scale.toFloat()),
+                        vao = torusArray,
+                        material = materiaaal,
+                        texture = null))
+            }
+        }
+        modelsToDraw = result
+    }
+
+    private fun getCenterOfRotationX(): Float {
+        return when (stepAnimating) {
+            Pair(Position.LEFT, Position.CENTER) -> {
+                -stickDistance / 2
+            }
+            Pair(Position.CENTER, Position.LEFT) -> {
+                -stickDistance / 2
+            }
+            Pair(Position.LEFT, Position.RIGHT) -> {
+                0f
+            }
+            Pair(Position.RIGHT, Position.LEFT) -> {
+                0f
+            }
+            Pair(Position.CENTER, Position.RIGHT) -> {
+                stickDistance / 2
+            }
+            Pair(Position.RIGHT, Position.CENTER) -> {
+                stickDistance / 2
+            }
+            else -> {
+                0f
             }
         }
     }
 
-    private fun drawModel(
-        model: Matrix4f,
-        vao: Int,
-        count: Int,
-        material: Material) {
-        drawModel(model, vao, 0, count, material, 0)
+    /**
+     * When rotating from left to right, use positive angle, when rotating from right to left, use negative angle
+     */
+    private fun getRotationAngleFactor(): Float {
+        return if (stepAnimating?.isLeftToRight() == true) {
+            1f
+        } else {
+            -1f
+        }
+    }
+
+
+    private fun getRadiusOfRotationX(): Float {
+        return when (stepAnimating) {
+            Pair(Position.LEFT, Position.CENTER) -> {
+                -stickDistance / 2
+            }
+            Pair(Position.CENTER, Position.LEFT) -> {
+                stickDistance / 2
+            }
+            Pair(Position.LEFT, Position.RIGHT) -> {
+                -stickDistance
+            }
+            Pair(Position.RIGHT, Position.LEFT) -> {
+                stickDistance
+            }
+            Pair(Position.CENTER, Position.RIGHT) -> {
+                -stickDistance / 2
+            }
+            Pair(Position.RIGHT, Position.CENTER) -> {
+                stickDistance / 2
+            }
+            else -> {
+                0f
+            }
+        }
+    }
+
+    private fun getTranslationX(position: Position): Float {
+        return when (position) {
+            Position.LEFT -> -stickDistance
+            Position.CENTER -> 0f
+            Position.RIGHT -> stickDistance
+        }
+    }
+
+    private fun increaseUntil(start: Float, step: Float, max: Float): Float {
+        return if (start + step < max) {
+            start + step
+        } else {
+            max
+        }
+    }
+
+    private fun decreaseUntil(start: Float, step: Float, min: Float): Float {
+        return if (start - step > min) {
+            start - step
+        } else {
+            min
+        }
+    }
+
+    /**
+     * indexOnStick == 0 means bottom most one
+     */
+    private fun getYForRingOnStick(indexOnStick: Int, stick: Stick, factor: Double): Float {
+        if (indexOnStick == 0) {
+            return 0f
+        }
+        val reversedRings = stick.rings.reversed()
+        val myHeight = Math.pow(factor, 8.0 - reversedRings[indexOnStick].radius) * 2.5
+        val bottomHeight = Math.pow(factor, 8.0 - reversedRings[0].radius) * 2.5
+        var cumSum = 0.0
+        (1 until indexOnStick).forEach { i ->
+            cumSum += (Math.pow(factor, 8.0 - reversedRings[i].radius) * 2.5)
+        }
+        return (cumSum + myHeight / 2.0 + bottomHeight / 2.0).toFloat()
+    }
+
+    private fun drawModels() {
+        modelsToDraw.forEach(::drawModel)
+    }
+
+    private fun drawModel(model: BaseModel) {
+        drawModel(model.model, model.vao, model.offset, model.count, model.material, model.texture ?: 0)
     }
 
     private fun drawModel(
@@ -414,7 +565,7 @@ class Main {
         offset: Int,
         count: Int,
         material: Material?,
-        diceTexture: Int) {
+        texture: Int) {
         // compute model-view-projection matrix
         val mvp = Matrix4f(projection)
             .mul(view)
@@ -428,33 +579,36 @@ class Main {
         glUseProgram(modelProgram)
         glBindVertexArray(vao) // bind vertex array to draw
 
-        glUniform4f(lightPositionLoc, 0f, 45f, 0f, 0f)
-        glUniform3f(lightAmbientColorLoc, 0.3f, 0.3f, 0.3f)
-        glUniform3f(lightDiffuseColorLoc, 1f, 1f, 1f)
-        glUniform3f(lightSpecularColorLoc, 1f, 1f, 1f)
+        glUniform4f(cache[LIGHT_POSITION], 0f, 45f, 0f, 1f)
+        glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.3f, 0.3f, 0.3f, 1f)
+        glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 1f, 1f, 1f, 1f)
+        glUniform4f(cache[LIGHT_SPECULAR_COLOR], 1f, 1f, 1f, 1f)
 
-        glUniform3f(eyePositionLoc, eyePosition.x, eyePosition.y, eyePosition.z)
+        glUniform3f(cache[EYE_POSITION], eyePosition.x, eyePosition.y, eyePosition.z)
 
         if (material != null) {
-            glUniform3f(
-                materialAmbientColorLoc,
+            glUniform4f(
+                cache[MATERIAL_AMBIENT_COLOR],
                 material.ambientColor.x,
                 material.ambientColor.y,
-                material.ambientColor.z
+                material.ambientColor.z,
+                material.ambientColor.w
             )
-            glUniform3f(
-                materialDiffuseColorLoc,
+            glUniform4f(
+                cache[MATERIAL_DIFFUSE_COLOR],
                 material.diffuseColor.x,
                 material.diffuseColor.y,
-                material.diffuseColor.z
+                material.diffuseColor.z,
+                material.diffuseColor.w
             )
-            glUniform3f(
-                materialSpecularColorLoc,
+            glUniform4f(
+                cache[MATERIAL_SPECULAR_COLOR],
                 material.specularColor.x,
                 material.specularColor.y,
-                material.specularColor.z
+                material.specularColor.z,
+                material.specularColor.w
             )
-            glUniform1f(materialShininessLoc, material.shininess)
+            glUniform1f(cache[MATERIAL_SHININESS], material.shininess)
         }
 
 //        glActiveTexture(GL_TEXTURE0)
@@ -468,9 +622,9 @@ class Main {
         mvp.get(mvpData)
         n.get(nData)
         model.get(modelData)
-        glUniformMatrix4fv(modelMvpLoc, false, mvpData) // pass MVP matrix to shader
-        glUniformMatrix3fv(modelNLoc, false, nData) // pass Normal matrix to shader
-        glUniformMatrix4fv(modelModelLoc, false, modelData) // pass model matrix to shader
+        glUniformMatrix4fv(cache[UAName.MVP], false, mvpData) // pass MVP matrix to shader
+        glUniformMatrix3fv(cache[UAName.N], false, nData) // pass Normal matrix to shader
+        glUniformMatrix4fv(cache[UAName.MODEL], false, modelData) // pass model matrix to shader
 
         glDrawArrays(GL_TRIANGLES, offset, count)
 
@@ -503,27 +657,10 @@ class Main {
         textureData.rewind()
 
         var texture = 0
-        // Task 1:  create GL texture object using glGenTextures() and store it in texture local variable
-        //          bind the texture using glBindTexture(GL_TEXTURE_2D, texture)
-        //          upload texture data using glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, <width>, <height>, 0, format, GL_UNSIGNED_BYTE, <data>)
-        //              get width and height from image object
-        //              data is loaded to ByteBuffer textureData
-        // Task 3:  generate mipmap levels using glGenerateMipmap(GL_TEXTURE_2D)
         texture = glGenTextures()
         glBindTexture(GL_TEXTURE_2D, texture)
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, 1000, 500, 0, format, GL_UNSIGNED_BYTE, textureData)
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, image.width, image.height, 0, format, GL_UNSIGNED_BYTE, textureData)
 
-        // Task 1:  set texture filtering using glTexParameteri(...) to GL_NEAREST
-        //              minification filter: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-        //              magnification filter: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-        // Task 2:  set texture filtering using glTexParameteri(...) to GL_LINEAR
-        //              minification filter: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        //              magnification filter: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        // Task 3:  change minification filter (GL_TEXTURE_MIN_FILTER) from GL_LINEAR to GL_LINEAR_MIPMAP_LINEAR
-        // Task 5:  set texture wrap mode to GL_MIRRORED_REPEAT in both S and T directions
-        //              S direction: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
-        //              T direction: glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
-        //              also try other modes, listed in the attached PDF :)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
 
@@ -533,15 +670,24 @@ class Main {
         return texture
     }
 
+    private fun sum(from: Int, to: Int, fnc: (Int) -> Float): Float {
+        return (from..to).fold(0.0f) { acc: Float, i: Int ->
+            acc + fnc(i)
+        }
+    }
+
     private fun keyCallback(window: Long, key: Int, scancode: Int, action: Int, mods: Int) {
         if (action == GLFW_RELEASE) {
             when (key) {
-                GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(
-                    window,
-                    true
-                ) // We will detect this in the rendering loop
-                GLFW_KEY_A -> animate = !animate
-                GLFW_KEY_T -> {
+                GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true)
+                GLFW_KEY_ENTER -> {
+                    if (!animationsLocked) {
+//                        game.step()
+//                        stepAnimating = game.lastStep
+//                        game.move(Position.LEFT, Position.CENTER)
+//                        stepAnimating = game.lastStep
+//                        animationStartedFrame = frameCounter TODO
+                    }
                 }
             }// TODO toggle fullscreen
         }
@@ -632,18 +778,6 @@ class Main {
     }
 
     companion object {
-        private const val SIZEOF_AXES_VERTEX = 6 * java.lang.Float.BYTES
-        private const val COLOR_OFFSET = 3 * java.lang.Float.BYTES
-        private val AXES = floatArrayOf(
-            // .. position .......... color ....
-            // x axis
-            1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
-            // y axis
-            0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
-            // z axis
-            0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f
-        )
-
         private const val SIZEOF_MODEL_VERTEX = 8 * java.lang.Float.BYTES
         private const val NORMAL_OFFSET = 3 * java.lang.Float.BYTES
         private const val TEXCOORD_OFFSET = 6 * java.lang.Float.BYTES
