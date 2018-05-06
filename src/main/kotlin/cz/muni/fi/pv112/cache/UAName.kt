@@ -19,6 +19,8 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
 
     WOOD_TEX("woodTex"),
 
+    USE_PROCEDURAL_TEXTURE("useProceduralTexture"),
+
     POSITION("position", UACache.UAMode.ATTRIB),
     NORMAL("normal", UACache.UAMode.ATTRIB),
     TEXCOORD("texcoord", UACache.UAMode.ATTRIB)

@@ -37,17 +37,12 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import javax.imageio.ImageIO
 
-sealed class AnimationPhase {
-    class NoAnimation : AnimationPhase()
-    class Up(val x: Float, val startY: Float, val endY: Float) : AnimationPhase()
-    class Rotation(val centerX: Float, val centerY: Float, val radius: Float) : AnimationPhase()
-    class Down(val x: Float, val startY: Float, val endY: Float) : AnimationPhase()
-}
-
 typealias StepAnimating = Pair<Position, Position>
+
 fun StepAnimating.isLeftToRight(): Boolean {
     return first == Position.LEFT || (first == Position.CENTER && second == Position.RIGHT)
 }
+
 fun StepAnimating.isSmallStep(): Boolean {
     return Math.abs(first.ordinal - second.ordinal) == 1
 }
@@ -68,23 +63,21 @@ class Main {
 
     // animation
     private var frameCounter = 0
+    private var rotationStartedFrame: Int? = null
+    private var rotationEndedFrame: Int? = null
     private var stepAnimating: StepAnimating? = null
     private val animationsLocked: Boolean
         get() = stepAnimating != null
 
-
-    private var nextAnimation: AnimationPhase = AnimationPhase.NoAnimation()
-
-
-    private var rotationStartedFrame: Int? = null
-    private var rotationEndedFrame: Int? = null
-
     // model
     private lateinit var torusObj: Obj
+    private lateinit var cubeObj: Obj
 
     // our OpenGL resources
     private var torusBuffer: Int = 0
     private var torusArray: Int = 0
+    private var cubeBuffer: Int = 0
+    private var cubeArray: Int = 0
 
     private var woodTexture: Int = 0
 
@@ -92,7 +85,7 @@ class Main {
 
     private var modelProgram: Int = 0
 
-    private val eyePosition = Vector3f(0.0f, 12.0f, 45.0f)
+    private val eyePosition = Vector3f(0.0f, 5.0f, 50.0f)
     private lateinit var projection: Matrix4f
     private lateinit var view: Matrix4f
 
@@ -107,8 +100,6 @@ class Main {
 
     private var yTranslation = 0f
     private var rotationAngleDegrees = 0.0
-
-
     private val maxY = 15f
 
 
@@ -213,8 +204,8 @@ class Main {
             // Measure speed
             val currentTime = glfwGetTime()
             nbFrames++
-            if ( currentTime - lastTime >= 1.0 ){ // If last prinf() was more than 1 sec ago
-//                println("$nbFrames FPS (${1000.0/nbFrames.toDouble()} ms/frame)")
+            if (currentTime - lastTime >= 1.0) { // If last prinf() was more than 1 sec ago
+                println("$nbFrames FPS (${1000.0 / nbFrames.toDouble()} ms/frame)")
                 nbFrames = 0
                 lastTime += 1.0
             }
@@ -233,9 +224,9 @@ class Main {
 
     private fun init() {
         projection = Matrix4f()
-            .perspective(java.lang.Math.toRadians(50.0).toFloat(), width / height.toFloat(), 1f, 1000f)
+            .perspective(java.lang.Math.toRadians(60.0).toFloat(), width / height.toFloat(), 1f, 1000f)
         view = Matrix4f()
-            .lookAt(eyePosition, Vector3f(0f, 12f, 0f), Vector3f(0f, 1f, 0f))
+            .lookAt(eyePosition, Vector3f(0f, 4f, 0f), Vector3f(0f, 1f, 0f))
 
         // empty scene color
         glClearColor(0.15f, 0.15f, 0.15f, 1.0f)
@@ -259,19 +250,24 @@ class Main {
         initCache()
 
         // create buffers with geometry
-        val buffers = IntArray(1)
+        // TODO extract the following code!!!
+        val buffers = IntArray(2)
         glGenBuffers(buffers)
         torusBuffer = buffers[0]
+        cubeBuffer = buffers[1]
 
         torusObj = Obj("/models/torus.obj")
+        cubeObj = Obj("/models/cube.obj")
+
         try {
             torusObj.load()
+            cubeObj.load()
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
         }
 
-        val length = 3 * 8 * torusObj.triangleCount
+        var length = 3 * 8 * torusObj.triangleCount
         val torusData = BufferUtils.createFloatBuffer(length)
         for (f in 0 until torusObj.triangleCount) {
             val pi = torusObj.vertexIndices[f]
@@ -290,22 +286,50 @@ class Main {
         glBindBuffer(GL_ARRAY_BUFFER, torusBuffer)
         glBufferData(GL_ARRAY_BUFFER, torusData, GL_STATIC_DRAW)
 
+        length = 3 * 8 * cubeObj.triangleCount
+        val cubeData = BufferUtils.createFloatBuffer(length)
+        for (f in 0 until cubeObj.triangleCount) {
+            val pi = cubeObj.vertexIndices[f]
+            val ni = cubeObj.normalIndices[f]
+            val ti = cubeObj.texcoordIndices[f]
+            for (i in 0..2) {
+                val position = cubeObj.vertices[pi[i]]
+                val normal = cubeObj.normals[ni[i]]
+                val texcoord = cubeObj.texcoords[ti[i]]
+                cubeData.put(position)
+                cubeData.put(normal)
+                cubeData.put(texcoord)
+            }
+        }
+        cubeData.rewind()
+        glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
+        glBufferData(GL_ARRAY_BUFFER, cubeData, GL_STATIC_DRAW)
+
         // clear buffer binding, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
         // create a vertex array object for the geometry
-        val arrays = IntArray(1)
+        val arrays = IntArray(2)
         glGenVertexArrays(arrays)
         torusArray = arrays[0]
+        cubeArray = arrays[1]
 
         // get cube program attributes
         val positionAttribLoc = cache[POSITION]
         val normalAttribLoc = cache[NORMAL]
         val texcoordAttribLoc = cache[TEXCOORD]
 
-        // TODO wtf?
         glBindVertexArray(torusArray)
         glBindBuffer(GL_ARRAY_BUFFER, torusBuffer)
+        glEnableVertexAttribArray(positionAttribLoc)
+        glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
+        glEnableVertexAttribArray(normalAttribLoc)
+        glVertexAttribPointer(normalAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, NORMAL_OFFSET.toLong())
+        glEnableVertexAttribArray(texcoordAttribLoc)
+        glVertexAttribPointer(texcoordAttribLoc, 2, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, TEXCOORD_OFFSET.toLong())
+
+        glBindVertexArray(cubeArray)
+        glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
         glEnableVertexAttribArray(positionAttribLoc)
         glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
         glEnableVertexAttribArray(normalAttribLoc)
@@ -353,13 +377,9 @@ class Main {
 
     private fun prepareModels() {
         val result = mutableListOf<BaseModel>()
-//        val mat = Material(Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), Vector3f(1f, 1f, 1f), 45f)
-        val mat = Material(Vector3f(0f, 0.1f, 0.06f), Vector3f(0f, 0.50980392f, 0.50980392f), Vector3f(0.50196078f, 0.50196078f, 0.50196078f), 32f)
-        val redMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.5f, 0f, 0f), Vector3f(0.7f, 0.6f, 0.6f), 32f)
-        val glassMat = Material(Vector3f(0f, 0f, 0f), Vector3f(0.588235f, 0.670588f, 0.729412f), Vector3f(0.9f, 0.9f, 0.9f), 32f)
-        val materials = listOf(mat, redMat, glassMat)
         val factor = 0.88
 
+        /* RINGS */
         for ((position, stick) in game.sticks) {
             val staticRings = if (animationsLocked && (position == stepAnimating?.second)) {
                 stick.rings.drop(1)
@@ -377,7 +397,7 @@ class Main {
             staticRings.reversed().forEachIndexed { index, ring ->
                 val scale = Math.pow(factor, numOfDiscs - ring.radius.toDouble())
                 val yTranslate = getYForRingOnStick(index, stick, factor)
-                val materiaaal = materials[index % 3]
+                val material = Material.discMaterials[(ring.radius - 1) % Material.discMaterials.size]
 
                 result.add(
                     ObjModel(
@@ -386,19 +406,22 @@ class Main {
                             .translate(getTranslationX(position), yTranslate, 0f)
                             .scale(scale.toFloat()),
                         vao = torusArray,
-                        material = materiaaal,
-                        texture = null))
+                        material = material,
+                        texture = null
+                    )
+                )
             }
 
             if (dynamicRing != null) {
+                var animationDone = false
                 val scale = Math.pow(factor, numOfDiscs - dynamicRing.radius.toDouble())
                 if (yTranslation < maxY && rotationStartedFrame == null) {
                     // MOVE UP
                     if (yTranslation <= 0) {
-//                        yTranslation = getYForRingOnStick(stick.rings.lastIndex, stick, factor)
                         val startingStick = game.sticks[stepAnimating?.first]?.deepCopy()
                         startingStick?.push(dynamicRing.copy())
-                        yTranslation = getYForRingOnStick(startingStick?.rings?.lastIndex ?: 7, startingStick ?: stick, factor)
+                        yTranslation =
+                                getYForRingOnStick(startingStick?.rings?.lastIndex ?: 7, startingStick ?: stick, factor)
                     }
                     yTranslation = increaseUntil(yTranslation, frameSpeed, maxY)
                 } else if (rotationEndedFrame == null) {
@@ -406,8 +429,8 @@ class Main {
                     if (rotationStartedFrame == null) {
                         rotationStartedFrame = frameCounter
                     }
-                    val diff = (rotationStartedFrame ?: 0) - frameCounter
-                    rotationAngleDegrees = if (diff > -180) {
+                    val diff = frameCounter - (rotationStartedFrame ?: 0)
+                    rotationAngleDegrees = if (diff <= 180) {
                         diff.toDouble()
                     } else {
                         rotationEndedFrame = frameCounter
@@ -415,34 +438,60 @@ class Main {
                     }
                 } else if (yTranslation > getYForRingOnStick(stick.rings.lastIndex, stick, factor)) {
                     // MOVING DOWN
-                    yTranslation = decreaseUntil(yTranslation, frameSpeed, getYForRingOnStick(stick.rings.lastIndex, stick, factor))
+                    yTranslation = decreaseUntil(
+                        yTranslation,
+                        frameSpeed,
+                        getYForRingOnStick(stick.rings.lastIndex, stick, factor)
+                    )
                 } else {
                     // ANIMATION DONE, RESETTING
-                    // TODO: this is causing that 1 frame blink in the end of animation
-                    if (yTranslation <= getYForRingOnStick(stick.rings.lastIndex, stick, factor)) {
-                        stepAnimating = null
-                        yTranslation = 0f
-                        rotationStartedFrame = null
-                        rotationEndedFrame = null
-                        rotationAngleDegrees = 0.0
-                    }
+                    animationDone = true
                 }
 
-                val materiaaal = materials[stick.rings.lastIndex % 3]
+                val material = Material.discMaterials[(dynamicRing.radius - 1) % Material.discMaterials.size]
 
                 result.add(
                     ObjModel(
                         obj = torusObj,
                         model = Matrix4f()
                             .translate(getCenterOfRotationX(), yTranslation, 0f)
-                            .rotate(Math.toRadians(rotationAngleDegrees * getRotationAngleFactor()).toFloat(), 0f, 0f, 1f)
+                            .rotate(
+                                Math.toRadians(rotationAngleDegrees * getRotationAngleFactor()).toFloat(),
+                                0f,
+                                0f,
+                                1f
+                            )
                             .translate(getRadiusOfRotationX(), 0f, 0f)
                             .scale(scale.toFloat()),
                         vao = torusArray,
-                        material = materiaaal,
-                        texture = null))
+                        material = material,
+                        texture = null
+                    )
+                )
+
+                if (animationDone) {
+                    stepAnimating = null
+                    yTranslation = 0f
+                    rotationStartedFrame = null
+                    rotationEndedFrame = null
+                    rotationAngleDegrees = 0.0
+                }
             }
         }
+
+        /* WALL */
+        result.add(
+            ObjModel(
+                obj = cubeObj,
+                model = Matrix4f()
+                    .translate(0f, 0f, -30f)
+                    .rotate(Math.toRadians(-1.0).toFloat(), 1f, 0f, 0f)
+                    .scale(100f, 70f, 0.1f),
+                vao = cubeArray,
+                material = null
+            )
+        )
+
         modelsToDraw = result
     }
 
@@ -477,9 +526,9 @@ class Main {
      */
     private fun getRotationAngleFactor(): Float {
         return if (stepAnimating?.isLeftToRight() == true) {
-            1f
-        } else {
             -1f
+        } else {
+            1f
         }
     }
 
@@ -565,7 +614,8 @@ class Main {
         offset: Int,
         count: Int,
         material: Material?,
-        texture: Int) {
+        texture: Int
+    ) {
         // compute model-view-projection matrix
         val mvp = Matrix4f(projection)
             .mul(view)
@@ -609,6 +659,9 @@ class Main {
                 material.specularColor.w
             )
             glUniform1f(cache[MATERIAL_SHININESS], material.shininess)
+            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 0)
+        } else {
+            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 1)
         }
 
 //        glActiveTexture(GL_TEXTURE0)
@@ -659,7 +712,17 @@ class Main {
         var texture = 0
         texture = glGenTextures()
         glBindTexture(GL_TEXTURE_2D, texture)
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, image.width, image.height, 0, format, GL_UNSIGNED_BYTE, textureData)
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            internalFormat,
+            image.width,
+            image.height,
+            0,
+            format,
+            GL_UNSIGNED_BYTE,
+            textureData
+        )
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
