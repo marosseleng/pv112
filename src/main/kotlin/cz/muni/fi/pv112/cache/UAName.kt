@@ -20,6 +20,7 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
     WOOD_TEX("woodTex"),
 
     USE_PROCEDURAL_TEXTURE("useProceduralTexture"),
+    READ_TEXTURE_FROM_SAMPLER("readTextureFromSampler"),
 
     POSITION("position", UACache.UAMode.ATTRIB),
     NORMAL("normal", UACache.UAMode.ATTRIB),

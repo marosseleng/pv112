@@ -20,10 +20,10 @@ uniform vec4 materialSpecularColor;
 uniform float materialShininess;
 
 uniform bool useProceduralTexture;
+uniform bool readTextureFromSampler;
 
-//uniform sampler2D woodTex;
+uniform sampler2D woodTex;
 
-//const vec3 orange = vec3(0.725, 0.306, 0.192);
 const vec3 orange = vec3(0.471, 0.286, 0.216);
 const vec3 grey = vec3(0.6602, 0.6562, 0.6445);
 
@@ -34,9 +34,12 @@ vec3 getOrangeForPos(vec2 p);
 
 void main() {
     vec4 color = mix(phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess), brickWall(), int(useProceduralTexture));
-//    vec3 woodColor = texture(woodTex, vTexCoord).rgb;
+
+    vec4 woodColor = vec4(texture(woodTex, vTexCoord).rgb, 1.0);
 //    fragColor = vec4(woodColor, 1.0);
-    fragColor = color;
+
+    vec4 totalResult = mix(color, woodColor, int(readTextureFromSampler));
+    fragColor = totalResult;
 }
 
 /*
@@ -69,7 +72,7 @@ vec4 phong(vec4 matAmbientColor, vec4 matDiffuseColor, vec4 matSpecularColor, fl
 vec4 brickWall() {
     float lgY = floor(40 * vTexCoord.y);
     float modulo = mod(lgY, 2);
-    vec3 horizontal = mix(grey, getOrangeForPos(vTexCoord), smoothstep(0.045, 0.1, fract(17 * vTexCoord.x + modulo * 0.5)) - smoothstep(0.9, 0.955, fract(17 * vTexCoord.x + modulo * 0.5)));
+    vec3 horizontal = mix(grey, getOrangeForPos(vTexCoord), smoothstep(0.035, 0.09, fract(17 * vTexCoord.x + modulo * 0.5)) - smoothstep(0.91, 0.965, fract(17 * vTexCoord.x + modulo * 0.5)));
     vec3 vertical = mix(grey, horizontal, smoothstep(0.06, 0.16, fract(40 * vTexCoord.y)) - smoothstep(0.84, 0.94, fract(40 * vTexCoord.y)));
 
     return vec4(vertical, 1.0);
@@ -80,5 +83,6 @@ float random(vec2 p) {
 }
 
 vec3 getOrangeForPos(vec2 p) {
+//    return orange * (1.0 + (random(p) / 3.0));
     return orange * (1.0 + (random(p) / 3.0));
 }

@@ -20,6 +20,8 @@ import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL12.GL_BGR
 import org.lwjgl.opengl.GL12.GL_BGRA
+import org.lwjgl.opengl.GL13.GL_TEXTURE0
+import org.lwjgl.opengl.GL13.glActiveTexture
 import org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER
 import org.lwjgl.opengl.GL15.GL_STATIC_DRAW
 import org.lwjgl.opengl.GL15.glBindBuffer
@@ -28,6 +30,7 @@ import org.lwjgl.opengl.GL15.glGenBuffers
 import org.lwjgl.opengl.GL20.*
 import org.lwjgl.opengl.GL30.glBindVertexArray
 import org.lwjgl.opengl.GL30.glGenVertexArrays
+import org.lwjgl.opengl.GL30.glGenerateMipmap
 import org.lwjgl.system.MemoryStack.stackPush
 import org.lwjgl.system.MemoryUtil.NULL
 import java.awt.image.BufferedImage
@@ -51,6 +54,8 @@ fun StepAnimating.isSmallStep(): Boolean {
  * TODO: for the game to be playable: save user's step from the last known state, in other words with every step, save it and compare with some known state,
  * if the state is recognized (we have it in the "official" solution), set the new "last-known-good-step" pointer to point to it
  * TODO: pre-generate steps for all possible user strategies (LR, LC, CR, CL, RL, RC)
+ * TODO: add switchable camera angles
+ * TODO: refactor translateY, to not move the center of bottom one in [0;0]
  */
 class Main {
     // the window handle
@@ -72,12 +77,15 @@ class Main {
     // model
     private lateinit var torusObj: Obj
     private lateinit var cubeObj: Obj
+    private lateinit var cylinderObj: Obj
 
     // our OpenGL resources
     private var torusBuffer: Int = 0
     private var torusArray: Int = 0
     private var cubeBuffer: Int = 0
     private var cubeArray: Int = 0
+    private var cylinderBuffer: Int = 0
+    private var cylinderArray: Int = 0
 
     private var woodTexture: Int = 0
 
@@ -85,7 +93,10 @@ class Main {
 
     private var modelProgram: Int = 0
 
-    private val eyePosition = Vector3f(0.0f, 5.0f, 50.0f)
+    private var lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
+    private var lookAtCenter = Vector3f(0f, 5.5f, 0f)
+    private var lookAtUp = Vector3f(0f, 1f, 0f)
+
     private lateinit var projection: Matrix4f
     private lateinit var view: Matrix4f
 
@@ -205,7 +216,7 @@ class Main {
             val currentTime = glfwGetTime()
             nbFrames++
             if (currentTime - lastTime >= 1.0) { // If last prinf() was more than 1 sec ago
-                println("$nbFrames FPS (${1000.0 / nbFrames.toDouble()} ms/frame)")
+//                println("$nbFrames FPS (${1000.0 / nbFrames.toDouble()} ms/frame)")
                 nbFrames = 0
                 lastTime += 1.0
             }
@@ -225,14 +236,14 @@ class Main {
     private fun init() {
         projection = Matrix4f()
             .perspective(java.lang.Math.toRadians(60.0).toFloat(), width / height.toFloat(), 1f, 1000f)
-        view = Matrix4f()
-            .lookAt(eyePosition, Vector3f(0f, 4f, 0f), Vector3f(0f, 1f, 0f))
+        viewChanged()
 
         // empty scene color
         glClearColor(0.15f, 0.15f, 0.15f, 1.0f)
         glLineWidth(3.0f) // makes lines thicker
 
         glEnable(GL_DEPTH_TEST)
+//        glEnable(GL_BLEND)
 
 
         try {
@@ -241,7 +252,7 @@ class Main {
                 "/shaders/model.fs.glsl"
             )
 
-            woodTexture = loadTexture("/textures/earthmap1k.jpg")
+            woodTexture = loadTexture("/textures/wood3.jpg")
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
@@ -251,17 +262,20 @@ class Main {
 
         // create buffers with geometry
         // TODO extract the following code!!!
-        val buffers = IntArray(2)
+        val buffers = IntArray(3)
         glGenBuffers(buffers)
         torusBuffer = buffers[0]
         cubeBuffer = buffers[1]
+        cylinderBuffer = buffers[2]
 
         torusObj = Obj("/models/torus.obj")
         cubeObj = Obj("/models/cube.obj")
+        cylinderObj = Obj("/models/cylinder.obj")
 
         try {
             torusObj.load()
             cubeObj.load()
+            cylinderObj.load()
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
@@ -305,14 +319,34 @@ class Main {
         glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
         glBufferData(GL_ARRAY_BUFFER, cubeData, GL_STATIC_DRAW)
 
+        length = 3 * 8 * cylinderObj.triangleCount
+        val cylinderData = BufferUtils.createFloatBuffer(length)
+        for (f in 0 until cylinderObj.triangleCount) {
+            val pi = cylinderObj.vertexIndices[f]
+            val ni = cylinderObj.normalIndices[f]
+            val ti = cylinderObj.texcoordIndices[f]
+            for (i in 0..2) {
+                val position = cylinderObj.vertices[pi[i]]
+                val normal = cylinderObj.normals[ni[i]]
+                val texcoord = cylinderObj.texcoords[ti[i]]
+                cylinderData.put(position)
+                cylinderData.put(normal)
+                cylinderData.put(texcoord)
+            }
+        }
+        cylinderData.rewind()
+        glBindBuffer(GL_ARRAY_BUFFER, cylinderBuffer)
+        glBufferData(GL_ARRAY_BUFFER, cylinderData, GL_STATIC_DRAW)
+
         // clear buffer binding, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
         // create a vertex array object for the geometry
-        val arrays = IntArray(2)
+        val arrays = IntArray(3)
         glGenVertexArrays(arrays)
         torusArray = arrays[0]
         cubeArray = arrays[1]
+        cylinderArray = arrays[2]
 
         // get cube program attributes
         val positionAttribLoc = cache[POSITION]
@@ -330,6 +364,15 @@ class Main {
 
         glBindVertexArray(cubeArray)
         glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer)
+        glEnableVertexAttribArray(positionAttribLoc)
+        glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
+        glEnableVertexAttribArray(normalAttribLoc)
+        glVertexAttribPointer(normalAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, NORMAL_OFFSET.toLong())
+        glEnableVertexAttribArray(texcoordAttribLoc)
+        glVertexAttribPointer(texcoordAttribLoc, 2, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, TEXCOORD_OFFSET.toLong())
+
+        glBindVertexArray(cylinderArray)
+        glBindBuffer(GL_ARRAY_BUFFER, cylinderBuffer)
         glEnableVertexAttribArray(positionAttribLoc)
         glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
         glEnableVertexAttribArray(normalAttribLoc)
@@ -485,10 +528,37 @@ class Main {
                 obj = cubeObj,
                 model = Matrix4f()
                     .translate(0f, 0f, -30f)
-                    .rotate(Math.toRadians(-1.0).toFloat(), 1f, 0f, 0f)
                     .scale(100f, 70f, 0.1f),
                 vao = cubeArray,
                 material = null
+            )
+        )
+
+        /* STICKS */
+        for (position in Position.values()) {
+            result.add(
+                ObjModel(
+                    obj = cylinderObj,
+                    model = Matrix4f()
+                        .translate(getTranslationX(position), 0f, 0f)
+                        .scale(0.65f, 4.6f, 0.65f),
+                    vao = cylinderArray,
+                    material = null,
+                    texture = woodTexture
+                )
+            )
+        }
+
+        /* TABLE */
+        result.add(
+            ObjModel(
+                obj = cylinderObj,
+                model = Matrix4f()
+                    .scale(17f, 0.2f, 6f)
+                    .rotate(Math.PI.toFloat(), 1f, 0f, 0f),
+                vao = cylinderArray,
+                material = null,
+                texture = woodTexture
             )
         )
 
@@ -587,17 +657,13 @@ class Main {
      * indexOnStick == 0 means bottom most one
      */
     private fun getYForRingOnStick(indexOnStick: Int, stick: Stick, factor: Double): Float {
-        if (indexOnStick == 0) {
-            return 0f
-        }
         val reversedRings = stick.rings.reversed()
         val myHeight = Math.pow(factor, 8.0 - reversedRings[indexOnStick].radius) * 2.5
-        val bottomHeight = Math.pow(factor, 8.0 - reversedRings[0].radius) * 2.5
         var cumSum = 0.0
-        (1 until indexOnStick).forEach { i ->
+        (0 until indexOnStick).forEach { i ->
             cumSum += (Math.pow(factor, 8.0 - reversedRings[i].radius) * 2.5)
         }
-        return (cumSum + myHeight / 2.0 + bottomHeight / 2.0).toFloat()
+        return (cumSum + myHeight / 2.0).toFloat()
     }
 
     private fun drawModels() {
@@ -634,7 +700,7 @@ class Main {
         glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 1f, 1f, 1f, 1f)
         glUniform4f(cache[LIGHT_SPECULAR_COLOR], 1f, 1f, 1f, 1f)
 
-        glUniform3f(cache[EYE_POSITION], eyePosition.x, eyePosition.y, eyePosition.z)
+        glUniform3f(cache[EYE_POSITION], lookAtEyePosition.x, lookAtEyePosition.y, lookAtEyePosition.z)
 
         if (material != null) {
             glUniform4f(
@@ -664,9 +730,14 @@ class Main {
             glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 1)
         }
 
-//        glActiveTexture(GL_TEXTURE0)
-//        glBindTexture(GL_TEXTURE_2D, woodTexture)
-//        glUniform1i(woodTexLoc, 0)
+        if (texture != 0) {
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, texture)
+            glUniform1i(cache[WOOD_TEX], 0)
+            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 1)
+        } else {
+            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 0)
+        }
 
 
         val mvpData = BufferUtils.createFloatBuffer(16)
@@ -681,7 +752,7 @@ class Main {
 
         glDrawArrays(GL_TRIANGLES, offset, count)
 
-//        glBindTexture(GL_TEXTURE_2D, 0)
+        glBindTexture(GL_TEXTURE_2D, 0)
         glBindVertexArray(0)
         glUseProgram(0)
     }
@@ -709,8 +780,7 @@ class Main {
         textureData.put(pixels)
         textureData.rewind()
 
-        var texture = 0
-        texture = glGenTextures()
+        val texture = glGenTextures()
         glBindTexture(GL_TEXTURE_2D, texture)
         glTexImage2D(
             GL_TEXTURE_2D,
@@ -723,6 +793,7 @@ class Main {
             GL_UNSIGNED_BYTE,
             textureData
         )
+        glGenerateMipmap(GL_TEXTURE_2D)
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -733,27 +804,45 @@ class Main {
         return texture
     }
 
-    private fun sum(from: Int, to: Int, fnc: (Int) -> Float): Float {
-        return (from..to).fold(0.0f) { acc: Float, i: Int ->
-            acc + fnc(i)
-        }
-    }
-
     private fun keyCallback(window: Long, key: Int, scancode: Int, action: Int, mods: Int) {
         if (action == GLFW_RELEASE) {
             when (key) {
                 GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true)
                 GLFW_KEY_ENTER -> {
                     if (!animationsLocked) {
-//                        game.step()
-//                        stepAnimating = game.lastStep
-//                        game.move(Position.LEFT, Position.CENTER)
-//                        stepAnimating = game.lastStep
-//                        animationStartedFrame = frameCounter TODO
                     }
                 }
-            }// TODO toggle fullscreen
+                GLFW_KEY_DOWN -> {
+                    lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
+                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtUp = Vector3f(0f, 1f, 0f)
+                    viewChanged()
+                }
+                GLFW_KEY_UP -> {
+                    lookAtEyePosition = Vector3f(0.0f, 55f, 0.0f)
+                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtUp = Vector3f(0f, 0f, -1f)
+                    viewChanged()
+                }
+                GLFW_KEY_LEFT -> {
+                    lookAtEyePosition = Vector3f(-stickDistance - 30f, 5.5f, 0f)
+                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtUp = Vector3f(0f, 1f, 0f)
+                    viewChanged()
+                }
+                GLFW_KEY_RIGHT -> {
+                    lookAtEyePosition = Vector3f(stickDistance + 30f, 5.5f, 0f)
+                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtUp = Vector3f(0f, 1f, 0f)
+                    viewChanged()
+                }
+            }
         }
+    }
+
+    private fun viewChanged() {
+        view = Matrix4f()
+            .lookAt(lookAtEyePosition, lookAtCenter, lookAtUp)
     }
 
     private fun mouseButtonCallback(window: Long, button: Int, action: Int, mods: Int) {
