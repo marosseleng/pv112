@@ -20,6 +20,7 @@ import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL12.GL_BGR
 import org.lwjgl.opengl.GL12.GL_BGRA
+import org.lwjgl.opengl.GL13.GL_MULTISAMPLE
 import org.lwjgl.opengl.GL13.GL_TEXTURE0
 import org.lwjgl.opengl.GL13.glActiveTexture
 import org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER
@@ -55,7 +56,6 @@ fun StepAnimating.isSmallStep(): Boolean {
  * if the state is recognized (we have it in the "official" solution), set the new "last-known-good-step" pointer to point to it
  * TODO: pre-generate steps for all possible user strategies (LR, LC, CR, CL, RL, RC)
  * TODO: add switchable camera angles
- * TODO: refactor translateY, to not move the center of bottom one in [0;0]
  */
 class Main {
     // the window handle
@@ -146,6 +146,7 @@ class Main {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3) // request the OpenGL 3.3 core profile context
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3)
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE)
+        glfwWindowHint(GLFW_SAMPLES, 8)
         if (System.getProperty("os.name").startsWith("Mac")) {
             glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE)
         }
@@ -244,6 +245,7 @@ class Main {
 
         glEnable(GL_DEPTH_TEST)
 //        glEnable(GL_BLEND)
+        glEnable(GL_MULTISAMPLE)
 
 
         try {
