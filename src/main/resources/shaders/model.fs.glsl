@@ -36,7 +36,6 @@ void main() {
     vec4 color = mix(phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess), brickWall(), int(useProceduralTexture));
 
     vec4 woodColor = vec4(texture(woodTex, vTexCoord).rgb, 1.0);
-//    fragColor = vec4(woodColor, 1.0);
 
     vec4 totalResult = mix(color, woodColor, int(readTextureFromSampler));
     fragColor = totalResult;
@@ -83,6 +82,5 @@ float random(vec2 p) {
 }
 
 vec3 getOrangeForPos(vec2 p) {
-//    return orange * (1.0 + (random(p) / 3.0));
     return orange * (1.0 + (random(p) / 3.0));
 }

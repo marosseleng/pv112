@@ -53,3 +53,7 @@ If you want to see the Hanoi towers simulation in the terminal, run
   - The automatic mode can be stopped using `M` which also switches the game into the manual mode. 
   
 3. Once the game is finished (all rings are moved to the stick that is different than the origin), it can be reset using `R`.
+
+#### Lincensed resources:
+
+- [Buzz sound](https://freesound.org/people/RICHERlandTV/sounds/216090/)

@@ -6,6 +6,7 @@ import cz.muni.fi.pv112.cache.UAName.*
 import cz.muni.fi.pv112.logic.HanoiTowers
 import cz.muni.fi.pv112.logic.Position
 import cz.muni.fi.pv112.logic.Stick
+import cz.muni.fi.pv112.logic.UserInputSequence
 import cz.muni.fi.pv112.model.BaseModel
 import cz.muni.fi.pv112.model.ObjModel
 import org.joml.Matrix3f
@@ -40,22 +41,32 @@ import java.io.IOException
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.imageio.ImageIO
+import org.lwjgl.openal.AL
+import org.lwjgl.openal.AL10.*
+import org.lwjgl.openal.ALC
+import org.lwjgl.openal.ALC10.*
+import org.lwjgl.stb.STBVorbis.stb_vorbis_decode_filename
+import java.nio.ShortBuffer
+import org.lwjgl.system.libc.LibCStdlib.free
 
-typealias StepAnimating = Pair<Position, Position>
 
-fun StepAnimating.isLeftToRight(): Boolean {
+typealias Step = Pair<Position, Position>
+
+fun Step.isLeftToRight(): Boolean {
     return first == Position.LEFT || (first == Position.CENTER && second == Position.RIGHT)
 }
 
-fun StepAnimating.isSmallStep(): Boolean {
+fun Step.isSmallStep(): Boolean {
     return Math.abs(first.ordinal - second.ordinal) == 1
+}
+
+fun Class<*>.getResourcePath(name: String): String {
+    return getResource(name).path
 }
 
 /**
  * TODO: for the game to be playable: save user's step from the last known state, in other words with every step, save it and compare with some known state,
  * if the state is recognized (we have it in the "official" solution), set the new "last-known-good-step" pointer to point to it
- * TODO: pre-generate steps for all possible user strategies (LR, LC, CR, CL, RL, RC)
- * TODO: add switchable camera angles
  */
 class Main {
     // the window handle
@@ -70,7 +81,7 @@ class Main {
     private var frameCounter = 0
     private var rotationStartedFrame: Int? = null
     private var rotationEndedFrame: Int? = null
-    private var stepAnimating: StepAnimating? = null
+    private var stepAnimating: Step? = null
     private val animationsLocked: Boolean
         get() = stepAnimating != null
 
@@ -105,13 +116,35 @@ class Main {
     // game related stuff
     private val numOfDiscs = 8
     private lateinit var game: HanoiTowers
+    private lateinit var userInputSequence: UserInputSequence
+    private var automaticMode = false
+        set(value) {
+            if (field == value) {
+                return
+            }
+            if (value) {
+                // automatic mode enabled
+                stepsForAutomaticMode = game.computeStepsForAutomaticSolve()
+            } else {
+                // manual mode enabled
+                stepsForAutomaticMode = mutableListOf()
+            }
+            field = value
+        }
+
+    private var stepsForAutomaticMode = listOf<Step>() // TODO
+
     private val stickDistance = 15f
     private val frameSpeed: Float
         get() = (Math.PI * stickDistance / 180).toFloat()
-
     private var yTranslation = 0f
     private var rotationAngleDegrees = 0.0
     private val maxY = 15f
+
+    private var sourcePointer: Int = -1
+    private var bufferPointer: Int = -1
+    private var context: Long = -1L
+    private var device: Long = -1L
 
 
     fun run() {
@@ -119,6 +152,12 @@ class Main {
 
         initGLFW()
         loop()
+
+        //Terminate OpenAL
+        alDeleteSources(sourcePointer)
+        alDeleteBuffers(bufferPointer)
+        alcDestroyContext(context)
+        alcCloseDevice(device)
 
         // Free the window callbacks and destroy the window
         glfwFreeCallbacks(window)
@@ -151,7 +190,7 @@ class Main {
             glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE)
         }
 
-        // set initial width and height
+        // push initial width and height
         width = 1280
         height = 720
 
@@ -166,6 +205,23 @@ class Main {
         glfwSetMouseButtonCallback(window, ::mouseButtonCallback)
         glfwSetCursorPosCallback(window, ::cursorPosCallback)
         glfwSetWindowSizeCallback(window, ::windowSizeCallback)
+
+        /* OPENAL */
+        val defaultDeviceName = alcGetString(0, ALC_DEFAULT_DEVICE_SPECIFIER)
+        device = alcOpenDevice(defaultDeviceName)
+
+        val attributes = intArrayOf(0)
+        context = alcCreateContext(device, attributes)
+        alcMakeContextCurrent(context)
+
+        val alcCapabilities = ALC.createCapabilities(device)
+        val alCapabilities = AL.createCapabilities(alcCapabilities)
+
+        var rawAudioBuffer: ShortBuffer
+
+        var channels: Int = -1
+        var sampleRate: Int = -1
+        /* OPENAL END */
 
         // Get the thread stack and push a new frame
         stackPush()
@@ -185,7 +241,41 @@ class Main {
                     (vidmode.width() - pWidth.get(0)) / 2,
                     (vidmode.height() - pHeight.get(0)) / 2
                 )
+
+                /* OPENAL */
+                //Allocate space to store return information from the function
+                val channelsBuffer = stack.mallocInt(1)
+                val sampleRateBuffer = stack.mallocInt(1)
+
+                rawAudioBuffer = stb_vorbis_decode_filename(Main::class.java.getResourcePath("/sounds/buzz.ogg"), channelsBuffer, sampleRateBuffer)
+
+                //Retreive the extra information that was stored in the buffers by the function
+                channels = channelsBuffer[0]
+                sampleRate = sampleRateBuffer[0]
+                //Find the correct OpenAL format
+
+                var format = -1
+                if (channels == 1) {
+                    format = AL_FORMAT_MONO16
+                } else if (channels == 2) {
+                    format = AL_FORMAT_STEREO16
+                }
+
+                //Request space for the buffer
+                bufferPointer = alGenBuffers()
+
+                //Send the data to OpenAL
+                alBufferData(bufferPointer, format, rawAudioBuffer, sampleRate)
+
+                //Free the memory allocated by STB
+                free(rawAudioBuffer)
             } // the stack frame is popped automatically
+
+        //Request a source
+        sourcePointer = alGenSources()
+
+        //Assign the sound we just loaded to the source
+        alSourcei(sourcePointer, AL_BUFFER, bufferPointer)
 
         // Make the OpenGL context current
         glfwMakeContextCurrent(window)
@@ -396,7 +486,8 @@ class Main {
     }
 
     private fun initGame() {
-        game = HanoiTowers(numOfDiscs)
+        game = HanoiTowers()
+        userInputSequence = UserInputSequence()
     }
 
     private fun render() {
@@ -407,12 +498,14 @@ class Main {
             resized = false
         }
 
-        if (!animationsLocked) {
-            game.step()
-            stepAnimating = game.lastStep
+        if (!animationsLocked && automaticMode) {
+            val nextStep = stepsForAutomaticMode.firstOrNull()
+            if (nextStep != null) {
+                stepsForAutomaticMode = stepsForAutomaticMode.drop(1)
+                game.move(nextStep.first, nextStep.second)
+                stepAnimating = game.lastStep
+            }
         }
-
-//        TODO    t += 0.02f
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
         glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
@@ -515,11 +608,7 @@ class Main {
                 )
 
                 if (animationDone) {
-                    stepAnimating = null
-                    yTranslation = 0f
-                    rotationStartedFrame = null
-                    rotationEndedFrame = null
-                    rotationAngleDegrees = 0.0
+                    resetAnimation()
                 }
             }
         }
@@ -569,22 +658,13 @@ class Main {
 
     private fun getCenterOfRotationX(): Float {
         return when (stepAnimating) {
-            Pair(Position.LEFT, Position.CENTER) -> {
+            Position.LEFT to Position.CENTER, Position.CENTER to Position.LEFT -> {
                 -stickDistance / 2
             }
-            Pair(Position.CENTER, Position.LEFT) -> {
-                -stickDistance / 2
-            }
-            Pair(Position.LEFT, Position.RIGHT) -> {
+            Position.LEFT to Position.RIGHT, Position.RIGHT to Position.LEFT -> {
                 0f
             }
-            Pair(Position.RIGHT, Position.LEFT) -> {
-                0f
-            }
-            Pair(Position.CENTER, Position.RIGHT) -> {
-                stickDistance / 2
-            }
-            Pair(Position.RIGHT, Position.CENTER) -> {
+            Position.CENTER to Position.RIGHT, Position.RIGHT to Position.CENTER -> {
                 stickDistance / 2
             }
             else -> {
@@ -603,7 +683,6 @@ class Main {
             1f
         }
     }
-
 
     private fun getRadiusOfRotationX(): Float {
         return when (stepAnimating) {
@@ -811,35 +890,74 @@ class Main {
             when (key) {
                 GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true)
                 GLFW_KEY_ENTER -> {
-                    if (!animationsLocked) {
+                    if (automaticMode) {
+                        // automatic mode is on
+                        alSourcePlay(sourcePointer)
+                        return
                     }
+                    if (animationsLocked) {
+                        // other animation in progress
+                        alSourcePlay(sourcePointer)
+                        return
+                    }
+                    if (userInputSequence.isValid()) {
+                        val (from, to) = userInputSequence
+                        if (game.move(from, to)) {
+                            // valid move
+                            stepAnimating = game.lastStep
+
+                            /* new stuff */
+
+                            /* new stuff end */
+
+                            println("INPUT: $userInputSequence")
+                        } else {
+                            alSourcePlay(sourcePointer)
+                        }
+                    } else {
+                        alSourcePlay(sourcePointer)
+                    }
+
                 }
-                GLFW_KEY_DOWN -> {
-                    lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
-                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
-                    lookAtUp = Vector3f(0f, 1f, 0f)
-                    viewChanged()
+                GLFW_KEY_1 -> {
+                    userInputSequence.push(1)
                 }
-                GLFW_KEY_UP -> {
-                    lookAtEyePosition = Vector3f(0.0f, 55f, 0.0f)
-                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
-                    lookAtUp = Vector3f(0f, 0f, -1f)
-                    viewChanged()
+                GLFW_KEY_2 -> {
+                    userInputSequence.push(2)
                 }
-                GLFW_KEY_LEFT -> {
-                    lookAtEyePosition = Vector3f(-stickDistance - 30f, 5.5f, 0f)
-                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
-                    lookAtUp = Vector3f(0f, 1f, 0f)
-                    viewChanged()
+                GLFW_KEY_3 -> {
+                    userInputSequence.push(3)
                 }
-                GLFW_KEY_RIGHT -> {
-                    lookAtEyePosition = Vector3f(stickDistance + 30f, 5.5f, 0f)
-                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
-                    lookAtUp = Vector3f(0f, 1f, 0f)
-                    viewChanged()
+                GLFW_KEY_C -> {
+                    userInputSequence = UserInputSequence()
+                }
+                GLFW_KEY_A -> {
+                    automaticMode = true
+
+                }
+                GLFW_KEY_M -> {
+                    automaticMode = false
+                }
+                GLFW_KEY_R -> {
+                    resetGame()
+                    resetAnimation()
                 }
             }
         }
+    }
+
+    private fun resetGame() {
+        game = HanoiTowers()
+        userInputSequence = UserInputSequence()
+        automaticMode = false
+    }
+
+    private fun resetAnimation() {
+        stepAnimating = null
+        yTranslation = 0f
+        rotationStartedFrame = null
+        rotationEndedFrame = null
+        rotationAngleDegrees = 0.0
     }
 
     private fun viewChanged() {
