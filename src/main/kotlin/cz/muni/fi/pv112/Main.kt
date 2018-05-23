@@ -9,6 +9,8 @@ import cz.muni.fi.pv112.logic.Stick
 import cz.muni.fi.pv112.logic.UserInputSequence
 import cz.muni.fi.pv112.model.BaseModel
 import cz.muni.fi.pv112.model.ObjModel
+import cz.muni.fi.pv112.utils.Step
+import cz.muni.fi.pv112.utils.isLeftToRight
 import org.joml.Matrix3f
 import org.joml.Matrix4f
 import org.joml.Vector3f
@@ -48,17 +50,7 @@ import org.lwjgl.openal.ALC10.*
 import org.lwjgl.stb.STBVorbis.stb_vorbis_decode_filename
 import java.nio.ShortBuffer
 import org.lwjgl.system.libc.LibCStdlib.free
-
-
-typealias Step = Pair<Position, Position>
-
-fun Step.isLeftToRight(): Boolean {
-    return first == Position.LEFT || (first == Position.CENTER && second == Position.RIGHT)
-}
-
-fun Step.isSmallStep(): Boolean {
-    return Math.abs(first.ordinal - second.ordinal) == 1
-}
+import kotlin.math.cos
 
 fun Class<*>.getResourcePath(name: String): String {
     return getResource(name).path
@@ -111,6 +103,11 @@ class Main {
     private lateinit var projection: Matrix4f
     private lateinit var view: Matrix4f
 
+    private var redConicLightPosition: Vector3f = Vector3f()
+    private var redConicLightDirection: Vector3f = Vector3f()
+    private var greenConicLightPosition: Vector3f = Vector3f()
+    private var greenConicLightDirection: Vector3f = Vector3f()
+
     private lateinit var modelsToDraw: List<BaseModel>
 
     // game related stuff
@@ -119,6 +116,7 @@ class Main {
     private lateinit var userInputSequence: UserInputSequence
     private var automaticMode = false
         set(value) {
+            onUserInput()
             if (field == value) {
                 return
             }
@@ -487,7 +485,33 @@ class Main {
 
     private fun initGame() {
         game = HanoiTowers()
-        userInputSequence = UserInputSequence()
+        userInputSequence = UserInputSequence(onValuePushedCallback = ::onUserInput)
+    }
+
+    private fun onUserInput() {
+        if (userInputSequence.currentUnsetPosition == 0) {
+            // sequence is reset
+            greenConicLightPosition = Vector3f()
+            greenConicLightDirection = Vector3f()
+            redConicLightPosition = Vector3f()
+            redConicLightDirection = Vector3f()
+            return
+        }
+        val (from, to) = userInputSequence
+        val (greenPosition, greenDirection) = when (from) {
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+        }
+        greenConicLightPosition = greenPosition
+        greenConicLightDirection = greenDirection
+        val (redPosition, redDirection) = when (to) {
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+        }
+        redConicLightPosition = redPosition
+        redConicLightDirection = redDirection
     }
 
     private fun render() {
@@ -776,10 +800,16 @@ class Main {
         glUseProgram(modelProgram)
         glBindVertexArray(vao) // bind vertex array to draw
 
-        glUniform4f(cache[LIGHT_POSITION], 0f, 45f, 0f, 1f)
+        glUniform4f(cache[LIGHT_POSITION], 0f, 75f, 0f, 1f)
         glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.3f, 0.3f, 0.3f, 1f)
         glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 1f, 1f, 1f, 1f)
         glUniform4f(cache[LIGHT_SPECULAR_COLOR], 1f, 1f, 1f, 1f)
+
+        glUniform4f(cache[RED_CONIC_LIGHT_POSITION], redConicLightPosition.x, redConicLightPosition.y, redConicLightPosition.z, 1f)
+        glUniform4f(cache[RED_CONIC_LIGHT_DIRECTION], redConicLightDirection.x, redConicLightDirection.y, redConicLightDirection.z, 1f)
+        glUniform4f(cache[GREEN_CONIC_LIGHT_POSITION], greenConicLightPosition.x, greenConicLightPosition.y, greenConicLightPosition.z, 1f)
+        glUniform4f(cache[GREEN_CONIC_LIGHT_DIRECTION], greenConicLightDirection.x, greenConicLightDirection.y, greenConicLightDirection.z, 1f)
+        glUniform1f(cache[CONIC_LIGHT_CUTOFF], cos(Math.toRadians(8.5)).toFloat())
 
         glUniform3f(cache[EYE_POSITION], lookAtEyePosition.x, lookAtEyePosition.y, lookAtEyePosition.z)
 
@@ -905,35 +935,40 @@ class Main {
                         if (game.move(from, to)) {
                             // valid move
                             stepAnimating = game.lastStep
-
-                            /* new stuff */
-
-                            /* new stuff end */
-
-                            println("INPUT: $userInputSequence")
+                            userInputSequence.reset()
                         } else {
                             alSourcePlay(sourcePointer)
                         }
                     } else {
                         alSourcePlay(sourcePointer)
                     }
-
                 }
                 GLFW_KEY_1 -> {
+                    if (automaticMode) {
+                        return
+                    }
                     userInputSequence.push(1)
                 }
                 GLFW_KEY_2 -> {
+                    if (automaticMode) {
+                        return
+                    }
                     userInputSequence.push(2)
                 }
                 GLFW_KEY_3 -> {
+                    if (automaticMode) {
+                        return
+                    }
                     userInputSequence.push(3)
                 }
                 GLFW_KEY_C -> {
-                    userInputSequence = UserInputSequence()
+                    if (automaticMode) {
+                        return
+                    }
+                    userInputSequence.reset()
                 }
                 GLFW_KEY_A -> {
                     automaticMode = true
-
                 }
                 GLFW_KEY_M -> {
                     automaticMode = false
@@ -942,13 +977,25 @@ class Main {
                     resetGame()
                     resetAnimation()
                 }
+                GLFW_KEY_UP -> {
+                    lookAtEyePosition = Vector3f(0f, 50f, 0f)
+                    lookAtCenter = Vector3f(0f, 0f, 0f)
+                    lookAtUp = Vector3f(0f, 0f, -1f)
+                    viewChanged()
+                }
+                GLFW_KEY_DOWN -> {
+                    lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
+                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtUp = Vector3f(0f, 1f, 0f)
+                    viewChanged()
+                }
             }
         }
     }
 
     private fun resetGame() {
         game = HanoiTowers()
-        userInputSequence = UserInputSequence()
+        userInputSequence.reset()
         automaticMode = false
     }
 

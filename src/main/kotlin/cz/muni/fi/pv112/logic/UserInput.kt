@@ -1,6 +1,6 @@
 package cz.muni.fi.pv112.logic
 
-class UserInputSequence(first: Position = Position.LEFT, second: Position = Position.RIGHT) {
+class UserInputSequence(first: Position = Position.LEFT, second: Position = Position.RIGHT, val onValuePushedCallback: () -> Unit) {
     private val array = Array(2) {
         if (it == 0) {
             first
@@ -8,7 +8,8 @@ class UserInputSequence(first: Position = Position.LEFT, second: Position = Posi
             second
         }
     }
-    private var currentUnsetPosition = 0
+    var currentUnsetPosition = 0
+        private set
 
     fun push(value: Int) {
         array[currentUnsetPosition % 2] = when (value) {
@@ -26,6 +27,7 @@ class UserInputSequence(first: Position = Position.LEFT, second: Position = Posi
             }
         }
         currentUnsetPosition++
+        onValuePushedCallback()
     }
 
     fun isValid() = array[0] != array[1]
@@ -36,6 +38,7 @@ class UserInputSequence(first: Position = Position.LEFT, second: Position = Posi
         currentUnsetPosition = 0
         array[0] = Position.LEFT
         array[1] = Position.CENTER
+        onValuePushedCallback()
     }
 
     operator fun component1(): Position {

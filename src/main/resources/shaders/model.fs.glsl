@@ -12,6 +12,15 @@ uniform vec4 lightAmbientColor;
 uniform vec4 lightDiffuseColor;
 uniform vec4 lightSpecularColor;
 
+uniform vec4 conicLightPosition;
+uniform vec4 conicLightDirection;
+uniform float conicLightCutoff;
+
+uniform vec4 redConicLightPosition;
+uniform vec4 redConicLightDirection;
+uniform vec4 greenConicLightPosition;
+uniform vec4 greenConicLightDirection;
+
 uniform vec3 eyePosition;
 
 uniform vec4 materialAmbientColor;
@@ -26,6 +35,8 @@ uniform sampler2D woodTex;
 
 const vec3 orange = vec3(0.471, 0.286, 0.216);
 const vec3 grey = vec3(0.6602, 0.6562, 0.6445);
+const vec4 green = vec4(0.0, 1.0, 0.0, 1.0);
+const vec4 red = vec4(1.0, 0.0, 0.0, 1.0);
 
 vec4 phong(vec4 matAmbientColor, vec4 matDiffuseColor, vec4 matSpecularColor, float matShininess);
 vec4 brickWall();
@@ -33,12 +44,38 @@ float random(vec2 p);
 vec3 getOrangeForPos(vec2 p);
 
 void main() {
-    vec4 color = mix(phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess), brickWall(), int(useProceduralTexture));
+    vec3 greenConicLightDir = normalize(greenConicLightPosition.xyz - vPosition);
+    vec3 redConicLightDir = normalize(redConicLightPosition.xyz - vPosition);
+
+    float greenTheta = dot(greenConicLightDir, normalize(-(greenConicLightDirection - greenConicLightPosition)).xyz);
+    float redTheta = dot(redConicLightDir, normalize(-(redConicLightDirection - redConicLightPosition)).xyz);
 
     vec4 woodColor = vec4(texture(woodTex, vTexCoord).rgb, 1.0);
+    vec4 color = readTextureFromSampler
+                    ? phong(woodColor, woodColor, woodColor, 30.0)
+                    : (useProceduralTexture
+                        ? brickWall()
+                        : phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess));
 
-    vec4 totalResult = mix(color, woodColor, int(readTextureFromSampler));
-    fragColor = totalResult;
+    if (greenTheta < conicLightCutoff && redTheta < conicLightCutoff) {
+        fragColor = color;
+    } else if (greenTheta > conicLightCutoff && redTheta < conicLightCutoff) {
+        fragColor = vec4(green * color);
+    } else if (redTheta > conicLightCutoff && greenTheta < conicLightCutoff) {
+        fragColor = vec4(red * color);
+    } else {
+        fragColor = 0.5 * red * color + 0.5 * green * color;
+    }
+
+//    if (theta < conicLightCutoff) {
+//        // do lighting calculations
+//        fragColor = color;
+//    } else {
+//        // else, use ambient light so scene isn't completely dark outside the spotlight.
+//        fragColor = vec4(red * color);
+//    }
+
+//    fragColor = color;
 }
 
 /*
@@ -74,7 +111,9 @@ vec4 brickWall() {
     vec3 horizontal = mix(grey, getOrangeForPos(vTexCoord), smoothstep(0.035, 0.09, fract(17 * vTexCoord.x + modulo * 0.5)) - smoothstep(0.91, 0.965, fract(17 * vTexCoord.x + modulo * 0.5)));
     vec3 vertical = mix(grey, horizontal, smoothstep(0.06, 0.16, fract(40 * vTexCoord.y)) - smoothstep(0.84, 0.94, fract(40 * vTexCoord.y)));
 
-    return vec4(vertical, 1.0);
+    vec4 resultingColor = vec4(vertical, 1.0);
+
+    return phong(resultingColor, resultingColor, resultingColor, 0.0);
 }
 
 float random(vec2 p) {

@@ -10,6 +10,12 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
     LIGHT_DIFFUSE_COLOR("lightDiffuseColor"),
     LIGHT_SPECULAR_COLOR("lightSpecularColor"),
 
+    RED_CONIC_LIGHT_POSITION("redConicLightPosition"),
+    RED_CONIC_LIGHT_DIRECTION("redConicLightDirection"),
+    GREEN_CONIC_LIGHT_POSITION("greenConicLightPosition"),
+    GREEN_CONIC_LIGHT_DIRECTION("greenConicLightDirection"),
+    CONIC_LIGHT_CUTOFF("conicLightCutoff"),
+
     EYE_POSITION("eyePosition"),
 
     MATERIAL_AMBIENT_COLOR("materialAmbientColor"),

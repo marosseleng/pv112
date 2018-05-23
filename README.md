@@ -29,9 +29,9 @@ If you want to see the Hanoi towers simulation in the terminal, run
 - [ ] Textures (at least 8 objects, using at least 3 distinct textures)
 - [x] Number of objects in the scene (at least 10 objects, at least 3 distinct, at least 8 loaded from file)
 - [ ] GUI 
-- [ ] Conic lights
+- [x] Conic lights
 - [x] Procedural textures (brick wall)
-- [ ] Sounds
+- [x] Sounds
 - [ ] Collision detection (will be doing?)
 - [ ] Light dimming (will be doing?)
 - [ ] Toon shading (will be doing?)
@@ -54,6 +54,6 @@ If you want to see the Hanoi towers simulation in the terminal, run
   
 3. Once the game is finished (all rings are moved to the stick that is different than the origin), it can be reset using `R`.
 
-#### Lincensed resources:
+#### Licensed resources:
 
 - [Buzz sound](https://freesound.org/people/RICHERlandTV/sounds/216090/)

@@ -1,19 +1,22 @@
 package cz.muni.fi.pv112.logic
 
-import cz.muni.fi.pv112.Step
+import cz.muni.fi.pv112.utils.Step
+import cz.muni.fi.pv112.utils.StepAndResult
+import cz.muni.fi.pv112.utils.Sticks
+import cz.muni.fi.pv112.utils.backwards
+import cz.muni.fi.pv112.utils.toTriple
 import java.util.LinkedList
+import java.util.Objects
 import java.util.Scanner
 import kotlin.math.max
 
 const val NUM_OF_RINGS = 8
 
 data class Ring(val radius: Int) {
+    override fun equals(other: Any?) = other != null && other is Ring && other.radius == this.radius
+    override fun hashCode() = this.radius
     override fun toString() = "(${(radius * 2).underscores()})"
 }
-
-typealias HanoiState = Triple<Stick, Stick, Stick>
-
-typealias StepAndResult = Pair<Step, HanoiTowers>
 
 class Stick {
     val rings = LinkedList<Ring>()
@@ -57,7 +60,7 @@ class Stick {
 
     fun toStringLines(): List<String> {
         val maxRadius = rings.map { it.radius }.max() ?: 0
-        val width = 2 * maxRadius + 2 // diameter + ()
+        val width = 2 * maxRadius + 2
         val ringsAttached = rings.size
         val emptyLines = NUM_OF_RINGS + 3 - ringsAttached
         val result = mutableListOf<String>()
@@ -80,10 +83,19 @@ class Stick {
         }
         return newStick
     }
+
+    private fun justStick(width: Int): String {
+        val numOfSpaces = (width - 2) / 2
+        return numOfSpaces.spaces() + "||" + numOfSpaces.spaces()
+    }
+
+    override fun equals(other: Any?) = other != null && other is Stick && other.rings.all { it in this.rings } && this.rings.all { it in other.rings }
+
+    override fun hashCode() = Objects.hash(this.rings)
 }
 
 class HanoiTowers {
-    lateinit var sticks: Map<Position, Stick>
+    lateinit var sticks: Sticks
         private set
 
     var lastStep: Step? = null
@@ -91,7 +103,7 @@ class HanoiTowers {
 
     private var stepsCount = 1
     private lateinit var movesDone: MutableList<Step>
-    private var existingStrategy = emptyList<Step>()
+    private var existingStrategy = emptyList<StepAndResult>()
     private var indexOfLastGoodMove = -1
 
     init {
@@ -112,25 +124,6 @@ class HanoiTowers {
     }
 
     /**
-     * Solves this [HanoiTowers] in one call
-     */
-    fun solve(): List<Step> {
-        val result = mutableListOf<Step>()
-        while (stepsCount <= Math.pow(2.0, NUM_OF_RINGS.toDouble()) - 1) {
-            step()
-            result.add(lastStep ?: (Position.LEFT to Position.RIGHT))
-        }
-        return result
-    }
-
-    /**
-     * Solves this [HanoiTowers] recursively in one call
-     */
-    fun solveRecursively(from: Position, inter: Position, to: Position) {
-        solveRecursively(NUM_OF_RINGS, from, inter, to)
-    }
-
-    /**
      * This function takes existingStrategy[indexOfLastGoodMove] and performs it
      */
     fun correctStep(): Int {
@@ -138,8 +131,8 @@ class HanoiTowers {
             indexOfLastGoodMove = -1
             return 0
         }
-        val correctStep = existingStrategy[indexOfLastGoodMove]
-        move(correctStep.first, correctStep.second)
+        val correctStep = existingStrategy[indexOfLastGoodMove].first
+        move(correctStep.first, correctStep.second, true)
         return indexOfLastGoodMove
     }
 
@@ -148,7 +141,7 @@ class HanoiTowers {
      *
      * @return true, iff the move succeeded
      */
-    fun move(from: Position, to: Position): Boolean {
+    fun move(from: Position, to: Position, verbose: Boolean = false): Boolean {
         if (sticks[from]?.isEmpty() == true) {
             return false
         }
@@ -160,26 +153,44 @@ class HanoiTowers {
             return false
         }
 
-        println()
-        println("Moving ring from $from to $to:")
-        println(this)
+        if (verbose) {
+            println()
+            println("Moving ring from $from to $to:")
+            println(this)
+        }
+
         val move = from to to
         lastStep = move
         movesDone.add(move)
 
-        if (existingStrategy.indexOf(move) > indexOfLastGoodMove) {
-            indexOfLastGoodMove = existingStrategy.indexOf(move)
+        val existingStrategyIndexOf = existingStrategy.indexOfFirst {
+            it.second == sticks.toTriple()
+        }
+
+        if (existingStrategyIndexOf > indexOfLastGoodMove) {
+            indexOfLastGoodMove = existingStrategyIndexOf
         }
 
         return result
     }
 
+    /**
+     * Computes the steps that the automatic mode will perform in order to successfully finish the game
+     */
     fun computeStepsForAutomaticSolve(): List<Step> {
-        return computeReturnSteps() + existingStrategy.drop(indexOfLastGoodMove + 1)
+        return computeReturnSteps() + existingStrategy.drop(indexOfLastGoodMove + 1).map { it.first }
     }
 
-    fun reset(): HanoiTowers {
-        return HanoiTowers()
+    /**
+     * Solves this [HanoiTowers] in one call
+     */
+    private fun solve(): List<StepAndResult> {
+        val result = mutableListOf<StepAndResult>()
+        while (stepsCount <= Math.pow(2.0, NUM_OF_RINGS.toDouble()) - 1) {
+            step()
+            result.add((lastStep ?: (Position.LEFT to Position.RIGHT)) to sticks.toTriple())
+        }
+        return result
     }
 
     /**
@@ -187,21 +198,12 @@ class HanoiTowers {
      */
     private fun computeReturnSteps(): List<Step> {
         return if (indexOfLastGoodMove < 0) {
-            movesDone.reversed()
+            movesDone
         } else {
-            val lastKnownGoodStep = movesDone.lastIndexOf(existingStrategy[indexOfLastGoodMove])
-            movesDone.drop(max(0, lastKnownGoodStep + 1)).reversed()
-        }
-    }
-
-    private fun solveRecursively(topN: Int, from: Position, inter: Position, to: Position) {
-        if (topN == 1) {
-            move(from, to)
-        } else {
-            solveRecursively(topN - 1, from, to, inter)
-            move(from, to)
-            solveRecursively(topN - 1, inter, from, to)
-        }
+            val lastKnownGoodStep = movesDone.lastIndexOf(existingStrategy[indexOfLastGoodMove].first)
+            movesDone.drop(max(0, lastKnownGoodStep + 1))
+        }.map { it.backwards() }
+            .reversed()
     }
 
     /**
@@ -263,11 +265,6 @@ fun Int.spaces(): String {
         sb.append(" ")
     }
     return sb.toString()
-}
-
-fun justStick(width: Int): String {
-    val numOfSpaces = (width - 2) / 2
-    return numOfSpaces.spaces() + "||" + numOfSpaces.spaces()
 }
 
 fun main(args: Array<String>) {
