@@ -47,9 +47,11 @@ import org.lwjgl.openal.AL
 import org.lwjgl.openal.AL10.*
 import org.lwjgl.openal.ALC
 import org.lwjgl.openal.ALC10.*
+import org.lwjgl.opengl.GL14.GL_MIRRORED_REPEAT
 import org.lwjgl.stb.STBVorbis.stb_vorbis_decode_filename
 import java.nio.ShortBuffer
 import org.lwjgl.system.libc.LibCStdlib.free
+import java.util.Random
 import kotlin.math.cos
 
 fun Class<*>.getResourcePath(name: String): String {
@@ -81,6 +83,7 @@ class Main {
     private lateinit var torusObj: Obj
     private lateinit var cubeObj: Obj
     private lateinit var cylinderObj: Obj
+    private lateinit var coneObj: Obj
 
     // our OpenGL resources
     private var torusBuffer: Int = 0
@@ -89,15 +92,21 @@ class Main {
     private var cubeArray: Int = 0
     private var cylinderBuffer: Int = 0
     private var cylinderArray: Int = 0
+    private var coneBuffer: Int = 0
+    private var coneArray: Int = 0
 
-    private var woodTexture: Int = 0
+    private var rust1Texture: Int = 0
+    private var rust2Texture: Int = 0
+    private var rust3Texture: Int = 0
+    private var steelTexture: Int = 0
+    private var brushedMetalTexture: Int = 0
 
     private lateinit var cache: UACache
 
     private var modelProgram: Int = 0
 
-    private var lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
-    private var lookAtCenter = Vector3f(0f, 5.5f, 0f)
+    private var lookAtEyePosition = Vector3f(0f, 15.5f, 50f)
+    private var lookAtCenter = Vector3f(0f, 15.5f, 0f)
     private var lookAtUp = Vector3f(0f, 1f, 0f)
 
     private lateinit var projection: Matrix4f
@@ -116,7 +125,7 @@ class Main {
     private lateinit var userInputSequence: UserInputSequence
     private var automaticMode = false
         set(value) {
-            onUserInput()
+            onUserInputSequenceChanged()
             if (field == value) {
                 return
             }
@@ -342,7 +351,11 @@ class Main {
                 "/shaders/model.fs.glsl"
             )
 
-            woodTexture = loadTexture("/textures/wood3.jpg")
+            rust1Texture = loadTexture("/textures/rust1.jpg")
+            rust2Texture = loadTexture("/textures/rust2.jpg")
+            rust3Texture = loadTexture("/textures/rust4.jpg")
+            steelTexture = loadTexture("/textures/steel.jpg")
+            brushedMetalTexture = loadTexture("/textures/brushed-metal.jpg")
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
@@ -352,20 +365,23 @@ class Main {
 
         // create buffers with geometry
         // TODO extract the following code!!!
-        val buffers = IntArray(3)
+        val buffers = IntArray(4)
         glGenBuffers(buffers)
         torusBuffer = buffers[0]
         cubeBuffer = buffers[1]
         cylinderBuffer = buffers[2]
+        coneBuffer = buffers[3]
 
         torusObj = Obj("/models/torus.obj")
         cubeObj = Obj("/models/cube.obj")
         cylinderObj = Obj("/models/cylinder.obj")
+        coneObj = Obj("/models/cone.obj")
 
         try {
             torusObj.load()
             cubeObj.load()
             cylinderObj.load()
+            coneObj.load()
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
@@ -428,15 +444,35 @@ class Main {
         glBindBuffer(GL_ARRAY_BUFFER, cylinderBuffer)
         glBufferData(GL_ARRAY_BUFFER, cylinderData, GL_STATIC_DRAW)
 
+        length = 3 * 8 * coneObj.triangleCount
+        val coneData = BufferUtils.createFloatBuffer(length)
+        for (f in 0 until coneObj.triangleCount) {
+            val pi = coneObj.vertexIndices[f]
+            val ni = coneObj.normalIndices[f]
+            val ti = coneObj.texcoordIndices[f]
+            for (i in 0..2) {
+                val position = coneObj.vertices[pi[i]]
+                val normal = coneObj.normals[ni[i]]
+                val texcoord = coneObj.texcoords[ti[i]]
+                coneData.put(position)
+                coneData.put(normal)
+                coneData.put(texcoord)
+            }
+        }
+        coneData.rewind()
+        glBindBuffer(GL_ARRAY_BUFFER, coneBuffer)
+        glBufferData(GL_ARRAY_BUFFER, coneData, GL_STATIC_DRAW)
+
         // clear buffer binding, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
         // create a vertex array object for the geometry
-        val arrays = IntArray(3)
+        val arrays = IntArray(4)
         glGenVertexArrays(arrays)
         torusArray = arrays[0]
         cubeArray = arrays[1]
         cylinderArray = arrays[2]
+        coneArray = arrays[3]
 
         // get cube program attributes
         val positionAttribLoc = cache[POSITION]
@@ -470,6 +506,15 @@ class Main {
         glEnableVertexAttribArray(texcoordAttribLoc)
         glVertexAttribPointer(texcoordAttribLoc, 2, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, TEXCOORD_OFFSET.toLong())
 
+        glBindVertexArray(coneArray)
+        glBindBuffer(GL_ARRAY_BUFFER, coneBuffer)
+        glEnableVertexAttribArray(positionAttribLoc)
+        glVertexAttribPointer(positionAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, 0)
+        glEnableVertexAttribArray(normalAttribLoc)
+        glVertexAttribPointer(normalAttribLoc, 3, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, NORMAL_OFFSET.toLong())
+        glEnableVertexAttribArray(texcoordAttribLoc)
+        glVertexAttribPointer(texcoordAttribLoc, 2, GL_FLOAT, false, SIZEOF_MODEL_VERTEX, TEXCOORD_OFFSET.toLong())
+
         // clear bindings, so that other code doesn't presume it (easier error detection)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)
@@ -485,10 +530,10 @@ class Main {
 
     private fun initGame() {
         game = HanoiTowers()
-        userInputSequence = UserInputSequence(onValuePushedCallback = ::onUserInput)
+        userInputSequence = UserInputSequence(onValuePushedCallback = ::onUserInputSequenceChanged)
     }
 
-    private fun onUserInput() {
+    private fun onUserInputSequenceChanged() {
         if (userInputSequence.currentUnsetPosition == 0) {
             // sequence is reset
             greenConicLightPosition = Vector3f()
@@ -499,16 +544,16 @@ class Main {
         }
         val (from, to) = userInputSequence
         val (greenPosition, greenDirection) = when (from) {
-            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
-            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
-            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 43f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 43f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 43f, 0f), Vector3f(stickDistance, 0f, 0f))
         }
         greenConicLightPosition = greenPosition
         greenConicLightDirection = greenDirection
         val (redPosition, redDirection) = when (to) {
-            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
-            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
-            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 43f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 43f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 43f, 0f), Vector3f(stickDistance, 0f, 0f))
         }
         redConicLightPosition = redPosition
         redConicLightDirection = redDirection
@@ -659,7 +704,7 @@ class Main {
                         .scale(0.65f, 4.6f, 0.65f),
                     vao = cylinderArray,
                     material = null,
-                    texture = woodTexture
+                    texture = brushedMetalTexture
                 )
             )
         }
@@ -673,9 +718,40 @@ class Main {
                     .rotate(Math.PI.toFloat(), 1f, 0f, 0f),
                 vao = cylinderArray,
                 material = null,
-                texture = woodTexture
+                texture = steelTexture
             )
         )
+
+        /* CONES */
+        for (position in Position.values()) {
+            val texture = when (position) {
+                Position.LEFT -> brushedMetalTexture
+                Position.CENTER -> rust3Texture
+                Position.RIGHT -> rust2Texture
+            }
+            result.add(
+                ObjModel(
+                    obj = coneObj,
+                    model = Matrix4f()
+                        .translate(getTranslationX(position), 33f, 0f)
+                        .scale(2f, 3.5f, 2f),
+                    vao = coneArray,
+                    material = null,
+                    texture = texture
+                )
+            )
+            result.add(
+                ObjModel(
+                    obj = cylinderObj,
+                    model = Matrix4f()
+                        .translate(getTranslationX(position), 39f, 0f)
+                        .scale(0.35f, 1.9f, 0.35f),
+                    vao = cylinderArray,
+                    material = null,
+                    texture = texture
+                )
+            )
+        }
 
         modelsToDraw = result
     }
@@ -800,16 +876,17 @@ class Main {
         glUseProgram(modelProgram)
         glBindVertexArray(vao) // bind vertex array to draw
 
-        glUniform4f(cache[LIGHT_POSITION], 0f, 75f, 0f, 1f)
-        glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.3f, 0.3f, 0.3f, 1f)
-        glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 1f, 1f, 1f, 1f)
-        glUniform4f(cache[LIGHT_SPECULAR_COLOR], 1f, 1f, 1f, 1f)
+        //Vector3f(0f, 15.5f, 50f)
+        glUniform4f(cache[LIGHT_POSITION], 0f, 35.5f, 50f, 1f)
+        glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.46f, 0.46f, 0.46f, 1f)
+        glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 0.83f, 0.83f, 0.83f, 1f)
+        glUniform4f(cache[LIGHT_SPECULAR_COLOR], 0.83f, 0.83f, 0.83f, 1f)
 
         glUniform4f(cache[RED_CONIC_LIGHT_POSITION], redConicLightPosition.x, redConicLightPosition.y, redConicLightPosition.z, 1f)
         glUniform4f(cache[RED_CONIC_LIGHT_DIRECTION], redConicLightDirection.x, redConicLightDirection.y, redConicLightDirection.z, 1f)
         glUniform4f(cache[GREEN_CONIC_LIGHT_POSITION], greenConicLightPosition.x, greenConicLightPosition.y, greenConicLightPosition.z, 1f)
         glUniform4f(cache[GREEN_CONIC_LIGHT_DIRECTION], greenConicLightDirection.x, greenConicLightDirection.y, greenConicLightDirection.z, 1f)
-        glUniform1f(cache[CONIC_LIGHT_CUTOFF], cos(Math.toRadians(8.5)).toFloat())
+        glUniform1f(cache[CONIC_LIGHT_CUTOFF], cos(Math.toRadians(9.0)).toFloat())
 
         glUniform3f(cache[EYE_POSITION], lookAtEyePosition.x, lookAtEyePosition.y, lookAtEyePosition.z)
 
@@ -844,7 +921,7 @@ class Main {
         if (texture != 0) {
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, texture)
-            glUniform1i(cache[WOOD_TEX], 0)
+            glUniform1i(cache[TEX], 0)
             glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 1)
         } else {
             glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 0)
@@ -908,6 +985,9 @@ class Main {
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT)
 
         // unbind texture
         glBindTexture(GL_TEXTURE_2D, 0)
@@ -978,14 +1058,14 @@ class Main {
                     resetAnimation()
                 }
                 GLFW_KEY_UP -> {
-                    lookAtEyePosition = Vector3f(0f, 50f, 0f)
+                    lookAtEyePosition = Vector3f(0f, 70f, 0f)
                     lookAtCenter = Vector3f(0f, 0f, 0f)
                     lookAtUp = Vector3f(0f, 0f, -1f)
                     viewChanged()
                 }
                 GLFW_KEY_DOWN -> {
-                    lookAtEyePosition = Vector3f(0f, 5.5f, 50f)
-                    lookAtCenter = Vector3f(0f, 5.5f, 0f)
+                    lookAtEyePosition = Vector3f(0f, 15.5f, 50f)
+                    lookAtCenter = Vector3f(0f, 15.5f, 0f)
                     lookAtUp = Vector3f(0f, 1f, 0f)
                     viewChanged()
                 }

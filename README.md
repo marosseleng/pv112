@@ -24,9 +24,9 @@ If you want to see the Hanoi towers simulation in the terminal, run
 
 #### Requirements met:
 
-- [ ] At least 2 lights
+- [x] At least 2 lights
 - [x] Animations
-- [ ] Textures (at least 8 objects, using at least 3 distinct textures)
+- [x] Textures (at least 8 objects, using at least 3 distinct textures)
 - [x] Number of objects in the scene (at least 10 objects, at least 3 distinct, at least 8 loaded from file)
 - [ ] GUI 
 - [x] Conic lights
@@ -53,6 +53,10 @@ If you want to see the Hanoi towers simulation in the terminal, run
   - The automatic mode can be stopped using `M` which also switches the game into the manual mode. 
   
 3. Once the game is finished (all rings are moved to the stick that is different than the origin), it can be reset using `R`.
+
+4. Menu can be shown using `P`.
+
+5. Menu can be hidden using `P`.
 
 #### Licensed resources:
 

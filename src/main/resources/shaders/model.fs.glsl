@@ -12,8 +12,6 @@ uniform vec4 lightAmbientColor;
 uniform vec4 lightDiffuseColor;
 uniform vec4 lightSpecularColor;
 
-uniform vec4 conicLightPosition;
-uniform vec4 conicLightDirection;
 uniform float conicLightCutoff;
 
 uniform vec4 redConicLightPosition;
@@ -31,12 +29,12 @@ uniform float materialShininess;
 uniform bool useProceduralTexture;
 uniform bool readTextureFromSampler;
 
-uniform sampler2D woodTex;
+uniform sampler2D tex;
 
 const vec3 orange = vec3(0.471, 0.286, 0.216);
 const vec3 grey = vec3(0.6602, 0.6562, 0.6445);
-const vec4 green = vec4(0.0, 1.0, 0.0, 1.0);
-const vec4 red = vec4(1.0, 0.0, 0.0, 1.0);
+const vec4 green = vec4(0.3843, 0.7686, 0.20588, 1.0);
+const vec4 red = vec4(0.7686, 0.30588, 0.30588, 1.0);
 
 vec4 phong(vec4 matAmbientColor, vec4 matDiffuseColor, vec4 matSpecularColor, float matShininess);
 vec4 brickWall();
@@ -50,7 +48,7 @@ void main() {
     float greenTheta = dot(greenConicLightDir, normalize(-(greenConicLightDirection - greenConicLightPosition)).xyz);
     float redTheta = dot(redConicLightDir, normalize(-(redConicLightDirection - redConicLightPosition)).xyz);
 
-    vec4 woodColor = vec4(texture(woodTex, vTexCoord).rgb, 1.0);
+    vec4 woodColor = vec4(texture(tex, 6 * vTexCoord).rgb, 1.0);
     vec4 color = readTextureFromSampler
                     ? phong(woodColor, woodColor, woodColor, 30.0)
                     : (useProceduralTexture
@@ -58,24 +56,18 @@ void main() {
                         : phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess));
 
     if (greenTheta < conicLightCutoff && redTheta < conicLightCutoff) {
+        // fragment is not in any cone
         fragColor = color;
     } else if (greenTheta > conicLightCutoff && redTheta < conicLightCutoff) {
+        // fragment is in the green cone
         fragColor = vec4(green * color);
     } else if (redTheta > conicLightCutoff && greenTheta < conicLightCutoff) {
+        // fragment is in the red cone
         fragColor = vec4(red * color);
     } else {
+        // fragment is in the intersections of the cone
         fragColor = 0.5 * red * color + 0.5 * green * color;
     }
-
-//    if (theta < conicLightCutoff) {
-//        // do lighting calculations
-//        fragColor = color;
-//    } else {
-//        // else, use ambient light so scene isn't completely dark outside the spotlight.
-//        fragColor = vec4(red * color);
-//    }
-
-//    fragColor = color;
 }
 
 /*

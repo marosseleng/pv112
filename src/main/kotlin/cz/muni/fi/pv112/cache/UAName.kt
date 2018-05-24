@@ -23,7 +23,7 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
     MATERIAL_SPECULAR_COLOR("materialSpecularColor"),
     MATERIAL_SHININESS("materialShininess"),
 
-    WOOD_TEX("woodTex"),
+    TEX("tex"),
 
     USE_PROCEDURAL_TEXTURE("useProceduralTexture"),
     READ_TEXTURE_FROM_SAMPLER("readTextureFromSampler"),
