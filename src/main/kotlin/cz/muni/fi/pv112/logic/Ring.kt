@@ -4,7 +4,9 @@ import cz.muni.fi.pv112.utils.Step
 import cz.muni.fi.pv112.utils.StepAndResult
 import cz.muni.fi.pv112.utils.Sticks
 import cz.muni.fi.pv112.utils.backwards
+import cz.muni.fi.pv112.utils.spaces
 import cz.muni.fi.pv112.utils.toTriple
+import cz.muni.fi.pv112.utils.underscores
 import java.util.LinkedList
 import java.util.Objects
 import java.util.Scanner
@@ -188,7 +190,7 @@ class HanoiTowers {
         val result = mutableListOf<StepAndResult>()
         while (stepsCount <= Math.pow(2.0, NUM_OF_RINGS.toDouble()) - 1) {
             step()
-            result.add((lastStep ?: (Position.LEFT to Position.RIGHT)) to sticks.toTriple())
+            result.add((lastStep?.copy() ?: (Position.LEFT to Position.RIGHT)) to sticks.toTriple())
         }
         return result
     }
@@ -249,22 +251,6 @@ class HanoiTowers {
 
 enum class Position {
     LEFT, CENTER, RIGHT
-}
-
-fun Int.underscores(): String {
-    val sb = StringBuilder()
-    repeat(this) {
-        sb.append("_")
-    }
-    return sb.toString()
-}
-
-fun Int.spaces(): String {
-    val sb = StringBuilder()
-    repeat(this) {
-        sb.append(" ")
-    }
-    return sb.toString()
 }
 
 fun main(args: Array<String>) {

@@ -1,6 +1,6 @@
 package cz.muni.fi.pv112.cache
 
-enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode.UNIFORM) {
+enum class ModelProgram(val varName: String, val mode: UACache.UAMode = UACache.UAMode.UNIFORM) {
     MVP("MVP"),
     N("N"),
     MODEL("model"),
@@ -15,6 +15,7 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
     GREEN_CONIC_LIGHT_POSITION("greenConicLightPosition"),
     GREEN_CONIC_LIGHT_DIRECTION("greenConicLightDirection"),
     CONIC_LIGHT_CUTOFF("conicLightCutoff"),
+    USE_CONIC_LIGHTS("useConicLights"),
 
     EYE_POSITION("eyePosition"),
 
@@ -27,6 +28,7 @@ enum class UAName(val varName: String, val type: UACache.UAMode = UACache.UAMode
 
     USE_PROCEDURAL_TEXTURE("useProceduralTexture"),
     READ_TEXTURE_FROM_SAMPLER("readTextureFromSampler"),
+    IS_MENU("isMenu"),
 
     POSITION("position", UACache.UAMode.ATTRIB),
     NORMAL("normal", UACache.UAMode.ATTRIB),

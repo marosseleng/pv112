@@ -19,6 +19,8 @@ uniform vec4 redConicLightDirection;
 uniform vec4 greenConicLightPosition;
 uniform vec4 greenConicLightDirection;
 
+uniform bool useConicLights;
+
 uniform vec3 eyePosition;
 
 uniform vec4 materialAmbientColor;
@@ -28,6 +30,7 @@ uniform float materialShininess;
 
 uniform bool useProceduralTexture;
 uniform bool readTextureFromSampler;
+uniform bool isMenu; // means read texture from sampler and do not apply lightning
 
 uniform sampler2D tex;
 
@@ -42,20 +45,24 @@ float random(vec2 p);
 vec3 getOrangeForPos(vec2 p);
 
 void main() {
+    if (isMenu) {
+        fragColor = vec4(texture(tex, vTexCoord).rgb, 1.0);
+        return;
+    }
     vec3 greenConicLightDir = normalize(greenConicLightPosition.xyz - vPosition);
     vec3 redConicLightDir = normalize(redConicLightPosition.xyz - vPosition);
 
     float greenTheta = dot(greenConicLightDir, normalize(-(greenConicLightDirection - greenConicLightPosition)).xyz);
     float redTheta = dot(redConicLightDir, normalize(-(redConicLightDirection - redConicLightPosition)).xyz);
 
-    vec4 woodColor = vec4(texture(tex, 6 * vTexCoord).rgb, 1.0);
+    vec4 textureColor = vec4(texture(tex, 6 * vTexCoord).rgb, 1.0);
     vec4 color = readTextureFromSampler
-                    ? phong(woodColor, woodColor, woodColor, 30.0)
+                    ? phong(textureColor, textureColor, textureColor, 30.0)
                     : (useProceduralTexture
                         ? brickWall()
                         : phong(materialAmbientColor, materialDiffuseColor, materialSpecularColor, materialShininess));
 
-    if (greenTheta < conicLightCutoff && redTheta < conicLightCutoff) {
+    if (!useConicLights || (greenTheta < conicLightCutoff && redTheta < conicLightCutoff)) {
         // fragment is not in any cone
         fragColor = color;
     } else if (greenTheta > conicLightCutoff && redTheta < conicLightCutoff) {

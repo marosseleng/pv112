@@ -24,6 +24,6 @@ typealias StepAndResult = Pair<Step, HanoiState>
 typealias Sticks = Map<Position, Stick>
 
 fun Sticks.toTriple(): Triple<Stick, Stick, Stick> {
-    return Triple(get(Position.LEFT) ?: Stick(), get(Position.CENTER) ?: Stick(), get(Position.RIGHT) ?: Stick())
+    return Triple(get(Position.LEFT)?.deepCopy() ?: Stick(), get(Position.CENTER)?.deepCopy() ?: Stick(), get(Position.RIGHT)?.deepCopy() ?: Stick())
 }
 

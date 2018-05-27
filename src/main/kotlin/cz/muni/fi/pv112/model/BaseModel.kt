@@ -10,7 +10,8 @@ abstract class BaseModel(
     val offset: Int,
     val count: Int,
     val material: Material?,
-    val texture: Int? = 0
+    val texture: Int? = 0,
+    val isMenu: Boolean = false
 )
 
 class ObjModel(
@@ -18,11 +19,13 @@ class ObjModel(
     model: Matrix4f,
     vao: Int,
     material: Material?,
-    texture: Int? = 0
+    texture: Int? = 0,
+    isMenu: Boolean = false
 ) : BaseModel(
     model = model,
     vao = vao,
     offset = 0,
     count = obj.triangleCount * 3,
     material = material,
-    texture = texture)
+    texture = texture,
+    isMenu = isMenu)

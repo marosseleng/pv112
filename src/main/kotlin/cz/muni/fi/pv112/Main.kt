@@ -1,8 +1,8 @@
 package cz.muni.fi.pv112
 
+import cz.muni.fi.pv112.cache.ModelProgram
+import cz.muni.fi.pv112.cache.ModelProgram.*
 import cz.muni.fi.pv112.cache.UACache
-import cz.muni.fi.pv112.cache.UAName
-import cz.muni.fi.pv112.cache.UAName.*
 import cz.muni.fi.pv112.logic.HanoiTowers
 import cz.muni.fi.pv112.logic.Position
 import cz.muni.fi.pv112.logic.Stick
@@ -11,6 +11,7 @@ import cz.muni.fi.pv112.model.BaseModel
 import cz.muni.fi.pv112.model.ObjModel
 import cz.muni.fi.pv112.utils.Step
 import cz.muni.fi.pv112.utils.isLeftToRight
+import cz.muni.fi.pv112.utils.loadProgram
 import org.joml.Matrix3f
 import org.joml.Matrix4f
 import org.joml.Vector3f
@@ -19,6 +20,16 @@ import org.lwjgl.Version
 import org.lwjgl.glfw.Callbacks.glfwFreeCallbacks
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWErrorCallback
+import org.lwjgl.openal.AL
+import org.lwjgl.openal.AL10.*
+import org.lwjgl.openal.ALC
+import org.lwjgl.openal.ALC10.ALC_DEFAULT_DEVICE_SPECIFIER
+import org.lwjgl.openal.ALC10.alcCloseDevice
+import org.lwjgl.openal.ALC10.alcCreateContext
+import org.lwjgl.openal.ALC10.alcDestroyContext
+import org.lwjgl.openal.ALC10.alcGetString
+import org.lwjgl.openal.ALC10.alcMakeContextCurrent
+import org.lwjgl.openal.ALC10.alcOpenDevice
 import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL12.GL_BGR
@@ -26,6 +37,7 @@ import org.lwjgl.opengl.GL12.GL_BGRA
 import org.lwjgl.opengl.GL13.GL_MULTISAMPLE
 import org.lwjgl.opengl.GL13.GL_TEXTURE0
 import org.lwjgl.opengl.GL13.glActiveTexture
+import org.lwjgl.opengl.GL14.GL_MIRRORED_REPEAT
 import org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER
 import org.lwjgl.opengl.GL15.GL_STATIC_DRAW
 import org.lwjgl.opengl.GL15.glBindBuffer
@@ -35,33 +47,22 @@ import org.lwjgl.opengl.GL20.*
 import org.lwjgl.opengl.GL30.glBindVertexArray
 import org.lwjgl.opengl.GL30.glGenVertexArrays
 import org.lwjgl.opengl.GL30.glGenerateMipmap
+import org.lwjgl.stb.STBVorbis.stb_vorbis_decode_filename
 import org.lwjgl.system.MemoryStack.stackPush
 import org.lwjgl.system.MemoryUtil.NULL
+import org.lwjgl.system.libc.LibCStdlib.free
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferByte
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ShortBuffer
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.imageio.ImageIO
-import org.lwjgl.openal.AL
-import org.lwjgl.openal.AL10.*
-import org.lwjgl.openal.ALC
-import org.lwjgl.openal.ALC10.*
-import org.lwjgl.opengl.GL14.GL_MIRRORED_REPEAT
-import org.lwjgl.stb.STBVorbis.stb_vorbis_decode_filename
-import java.nio.ShortBuffer
-import org.lwjgl.system.libc.LibCStdlib.free
-import java.util.Random
 import kotlin.math.cos
 
-fun Class<*>.getResourcePath(name: String): String {
-    return getResource(name).path
-}
 
-/**
- * TODO: for the game to be playable: save user's step from the last known state, in other words with every step, save it and compare with some known state,
- * if the state is recognized (we have it in the "official" solution), set the new "last-known-good-step" pointer to point to it
- */
 class Main {
     // the window handle
     private var window: Long = 0
@@ -85,7 +86,7 @@ class Main {
     private lateinit var cylinderObj: Obj
     private lateinit var coneObj: Obj
 
-    // our OpenGL resources
+    // VAOs, VBOs
     private var torusBuffer: Int = 0
     private var torusArray: Int = 0
     private var cubeBuffer: Int = 0
@@ -95,14 +96,18 @@ class Main {
     private var coneBuffer: Int = 0
     private var coneArray: Int = 0
 
+    // Textures
     private var rust1Texture: Int = 0
     private var rust2Texture: Int = 0
     private var rust3Texture: Int = 0
     private var steelTexture: Int = 0
     private var brushedMetalTexture: Int = 0
+    private var menuTexture: Int = 0
 
+    // Caches
     private lateinit var cache: UACache
 
+    // Programs
     private var modelProgram: Int = 0
 
     private var lookAtEyePosition = Vector3f(0f, 15.5f, 50f)
@@ -112,10 +117,12 @@ class Main {
     private lateinit var projection: Matrix4f
     private lateinit var view: Matrix4f
 
+    // Conic lights
     private var redConicLightPosition: Vector3f = Vector3f()
     private var redConicLightDirection: Vector3f = Vector3f()
     private var greenConicLightPosition: Vector3f = Vector3f()
     private var greenConicLightDirection: Vector3f = Vector3f()
+    private var useConicLights = false
 
     private lateinit var modelsToDraw: List<BaseModel>
 
@@ -138,8 +145,15 @@ class Main {
             }
             field = value
         }
+    private var showMenu = true
+        set(value) {
+            if (value) {
+                automaticMode = false
+            }
+            field = value
+        }
 
-    private var stepsForAutomaticMode = listOf<Step>() // TODO
+    private var stepsForAutomaticMode = listOf<Step>()
 
     private val stickDistance = 15f
     private val frameSpeed: Float
@@ -152,7 +166,6 @@ class Main {
     private var bufferPointer: Int = -1
     private var context: Long = -1L
     private var device: Long = -1L
-
 
     fun run() {
         println("Hello LWJGL " + Version.getVersion() + "!")
@@ -223,11 +236,6 @@ class Main {
 
         val alcCapabilities = ALC.createCapabilities(device)
         val alCapabilities = AL.createCapabilities(alcCapabilities)
-
-        var rawAudioBuffer: ShortBuffer
-
-        var channels: Int = -1
-        var sampleRate: Int = -1
         /* OPENAL END */
 
         // Get the thread stack and push a new frame
@@ -254,11 +262,35 @@ class Main {
                 val channelsBuffer = stack.mallocInt(1)
                 val sampleRateBuffer = stack.mallocInt(1)
 
-                rawAudioBuffer = stb_vorbis_decode_filename(Main::class.java.getResourcePath("/sounds/buzz.ogg"), channelsBuffer, sampleRateBuffer)
+                /* THIS IS A WORKAROUND FOR USING Class.getResourceAsStream(...).path which didn't work */
+                var file: File? = null
+                try {
+                    val input = javaClass.getResourceAsStream("/sounds/buzz.ogg")
+                    file = File.createTempFile("tempfile", ".tmp")
+                    val out = FileOutputStream(file ?: File("/"))
+                    val bytes = ByteArray(1024)
+
+                    do {
+                        val read = input.read(bytes)
+                        if (read != -1) {
+                            out.write(bytes, 0, read)
+                        }
+                    } while (read != -1)
+                    file.deleteOnExit()
+                } catch (ex: IOException) {
+                    ex.printStackTrace()
+                    System.exit(1)
+                }
+
+                if (file != null && !file.exists()) {
+                    throw RuntimeException("Error: File $file not found!")
+                }
+
+                val rawAudioBuffer: ShortBuffer = stb_vorbis_decode_filename(file?.absolutePath ?: "", channelsBuffer, sampleRateBuffer)
 
                 //Retreive the extra information that was stored in the buffers by the function
-                channels = channelsBuffer[0]
-                sampleRate = sampleRateBuffer[0]
+                val channels: Int = channelsBuffer[0]
+                val sampleRate: Int = sampleRateBuffer[0]
                 //Find the correct OpenAL format
 
                 var format = -1
@@ -314,7 +346,7 @@ class Main {
             val currentTime = glfwGetTime()
             nbFrames++
             if (currentTime - lastTime >= 1.0) { // If last prinf() was more than 1 sec ago
-//                println("$nbFrames FPS (${1000.0 / nbFrames.toDouble()} ms/frame)")
+                println("$nbFrames FPS (${1000.0 / nbFrames.toDouble()} ms/frame)")
                 nbFrames = 0
                 lastTime += 1.0
             }
@@ -341,9 +373,9 @@ class Main {
         glLineWidth(3.0f) // makes lines thicker
 
         glEnable(GL_DEPTH_TEST)
-//        glEnable(GL_BLEND)
         glEnable(GL_MULTISAMPLE)
-
+        glEnable (GL_BLEND)
+        glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         try {
             modelProgram = loadProgram(
@@ -356,6 +388,7 @@ class Main {
             rust3Texture = loadTexture("/textures/rust4.jpg")
             steelTexture = loadTexture("/textures/steel.jpg")
             brushedMetalTexture = loadTexture("/textures/brushed-metal.jpg")
+            menuTexture = loadTexture("/textures/menu.png")
         } catch (ex: IOException) {
             Logger.getLogger(Main::class.java.name).log(Level.SEVERE, null, ex)
             System.exit(1)
@@ -524,39 +557,13 @@ class Main {
 
     private fun initCache() {
         cache = UACache(modelProgram).apply {
-            cache(*UAName.values())
+            cache(*ModelProgram.values())
         }
     }
 
     private fun initGame() {
         game = HanoiTowers()
         userInputSequence = UserInputSequence(onValuePushedCallback = ::onUserInputSequenceChanged)
-    }
-
-    private fun onUserInputSequenceChanged() {
-        if (userInputSequence.currentUnsetPosition == 0) {
-            // sequence is reset
-            greenConicLightPosition = Vector3f()
-            greenConicLightDirection = Vector3f()
-            redConicLightPosition = Vector3f()
-            redConicLightDirection = Vector3f()
-            return
-        }
-        val (from, to) = userInputSequence
-        val (greenPosition, greenDirection) = when (from) {
-            Position.LEFT -> Pair(Vector3f(-stickDistance, 43f, 0f), Vector3f(-stickDistance, 0f, 0f))
-            Position.CENTER -> Pair(Vector3f(0f, 43f, 0f), Vector3f(0f, 0f, 0f))
-            Position.RIGHT -> Pair(Vector3f(stickDistance, 43f, 0f), Vector3f(stickDistance, 0f, 0f))
-        }
-        greenConicLightPosition = greenPosition
-        greenConicLightDirection = greenDirection
-        val (redPosition, redDirection) = when (to) {
-            Position.LEFT -> Pair(Vector3f(-stickDistance, 43f, 0f), Vector3f(-stickDistance, 0f, 0f))
-            Position.CENTER -> Pair(Vector3f(0f, 43f, 0f), Vector3f(0f, 0f, 0f))
-            Position.RIGHT -> Pair(Vector3f(stickDistance, 43f, 0f), Vector3f(stickDistance, 0f, 0f))
-        }
-        redConicLightPosition = redPosition
-        redConicLightDirection = redDirection
     }
 
     private fun render() {
@@ -583,6 +590,25 @@ class Main {
     }
 
     private fun prepareModels() {
+        modelsToDraw = if (!showMenu) {
+            prepareModelsForGame()
+        } else {
+            listOf(
+                ObjModel(
+                    obj = cubeObj,
+                    model = Matrix4f()
+                        .translate(0f, 15f, 0f)
+                        .scale(1.5f * 32f, 1.5f * 18f, 0.1f),
+                    vao = cubeArray,
+                    material = null,
+                    texture = menuTexture,
+                    isMenu = true
+                )
+            )
+        }
+    }
+
+    private fun prepareModelsForGame(): List<BaseModel> {
         val result = mutableListOf<BaseModel>()
         val factor = 0.88
 
@@ -722,7 +748,7 @@ class Main {
             )
         )
 
-        /* CONES */
+        /* LAMPS */
         for (position in Position.values()) {
             val texture = when (position) {
                 Position.LEFT -> brushedMetalTexture
@@ -733,7 +759,7 @@ class Main {
                 ObjModel(
                     obj = coneObj,
                     model = Matrix4f()
-                        .translate(getTranslationX(position), 33f, 0f)
+                        .translate(getTranslationX(position), 36f, 0f)
                         .scale(2f, 3.5f, 2f),
                     vao = coneArray,
                     material = null,
@@ -744,7 +770,7 @@ class Main {
                 ObjModel(
                     obj = cylinderObj,
                     model = Matrix4f()
-                        .translate(getTranslationX(position), 39f, 0f)
+                        .translate(getTranslationX(position), 42f, 0f)
                         .scale(0.35f, 1.9f, 0.35f),
                     vao = cylinderArray,
                     material = null,
@@ -753,7 +779,140 @@ class Main {
             )
         }
 
-        modelsToDraw = result
+        return result
+    }
+
+    private fun drawModels() {
+        modelsToDraw.forEach(::draw3dModel)
+    }
+
+    private fun draw3dModel(model: BaseModel) {
+        draw3dModel(model.model, model.vao, model.offset, model.count, model.material, model.texture ?: 0, model.isMenu)
+    }
+
+    private fun draw3dModel(
+        model: Matrix4f,
+        vao: Int,
+        offset: Int,
+        count: Int,
+        material: Material?,
+        texture: Int,
+        isMenu: Boolean = false
+    ) {
+        // compute model-view-projection matrix
+        val mvp = Matrix4f(projection)
+            .mul(view)
+            .mul(model)
+
+        // compute normal matrix
+        val n = model.get3x3(Matrix3f())
+            .invert()
+            .transpose()
+
+        glUseProgram(modelProgram)
+        glBindVertexArray(vao) // bind vertex array to draw
+
+        //Vector3f(0f, 15.5f, 50f)
+        glUniform4f(cache[LIGHT_POSITION], 0f, 35.5f, 50f, 1f)
+        glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.46f, 0.46f, 0.46f, 1f)
+        glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 0.83f, 0.83f, 0.83f, 1f)
+        glUniform4f(cache[LIGHT_SPECULAR_COLOR], 0.83f, 0.83f, 0.83f, 1f)
+
+        if (useConicLights) {
+            glUniform4f(
+                cache[RED_CONIC_LIGHT_POSITION],
+                redConicLightPosition.x,
+                redConicLightPosition.y,
+                redConicLightPosition.z,
+                1f
+            )
+            glUniform4f(
+                cache[RED_CONIC_LIGHT_DIRECTION],
+                redConicLightDirection.x,
+                redConicLightDirection.y,
+                redConicLightDirection.z,
+                1f
+            )
+            glUniform4f(
+                cache[GREEN_CONIC_LIGHT_POSITION],
+                greenConicLightPosition.x,
+                greenConicLightPosition.y,
+                greenConicLightPosition.z,
+                1f
+            )
+            glUniform4f(
+                cache[GREEN_CONIC_LIGHT_DIRECTION],
+                greenConicLightDirection.x,
+                greenConicLightDirection.y,
+                greenConicLightDirection.z,
+                1f
+            )
+            glUniform1f(cache[CONIC_LIGHT_CUTOFF], cos(Math.toRadians(8.7)).toFloat())
+            glUniform1i(cache[USE_CONIC_LIGHTS], 1)
+        } else {
+            glUniform1i(cache[USE_CONIC_LIGHTS], 0)
+        }
+
+        glUniform3f(cache[EYE_POSITION], lookAtEyePosition.x, lookAtEyePosition.y, lookAtEyePosition.z)
+
+        if (material != null) {
+            glUniform4f(
+                cache[MATERIAL_AMBIENT_COLOR],
+                material.ambientColor.x,
+                material.ambientColor.y,
+                material.ambientColor.z,
+                material.ambientColor.w
+            )
+            glUniform4f(
+                cache[MATERIAL_DIFFUSE_COLOR],
+                material.diffuseColor.x,
+                material.diffuseColor.y,
+                material.diffuseColor.z,
+                material.diffuseColor.w
+            )
+            glUniform4f(
+                cache[MATERIAL_SPECULAR_COLOR],
+                material.specularColor.x,
+                material.specularColor.y,
+                material.specularColor.z,
+                material.specularColor.w
+            )
+            glUniform1f(cache[MATERIAL_SHININESS], material.shininess)
+            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 0)
+        } else {
+            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 1)
+        }
+
+        if (texture != 0) {
+            glActiveTexture(GL_TEXTURE0)
+            glBindTexture(GL_TEXTURE_2D, texture)
+            glUniform1i(cache[TEX], 0)
+            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 1)
+            if (isMenu) {
+                glUniform1i(cache[IS_MENU], 1)
+            } else {
+                glUniform1i(cache[IS_MENU], 0)
+            }
+        } else {
+            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 0)
+        }
+
+
+        val mvpData = BufferUtils.createFloatBuffer(16)
+        val nData = BufferUtils.createFloatBuffer(9)
+        val modelData = BufferUtils.createFloatBuffer(16)
+        mvp.get(mvpData)
+        n.get(nData)
+        model.get(modelData)
+        glUniformMatrix4fv(cache[ModelProgram.MVP], false, mvpData) // pass MVP matrix to shader
+        glUniformMatrix3fv(cache[ModelProgram.N], false, nData) // pass Normal matrix to shader
+        glUniformMatrix4fv(cache[ModelProgram.MODEL], false, modelData) // pass model matrix to shader
+
+        glDrawArrays(GL_TRIANGLES, offset, count)
+
+        glBindTexture(GL_TEXTURE_2D, 0)
+        glBindVertexArray(0)
+        glUseProgram(0)
     }
 
     private fun getCenterOfRotationX(): Float {
@@ -847,104 +1006,6 @@ class Main {
         return (cumSum + myHeight / 2.0).toFloat()
     }
 
-    private fun drawModels() {
-        modelsToDraw.forEach(::drawModel)
-    }
-
-    private fun drawModel(model: BaseModel) {
-        drawModel(model.model, model.vao, model.offset, model.count, model.material, model.texture ?: 0)
-    }
-
-    private fun drawModel(
-        model: Matrix4f,
-        vao: Int,
-        offset: Int,
-        count: Int,
-        material: Material?,
-        texture: Int
-    ) {
-        // compute model-view-projection matrix
-        val mvp = Matrix4f(projection)
-            .mul(view)
-            .mul(model)
-
-        // compute normal matrix
-        val n = model.get3x3(Matrix3f())
-            .invert()
-            .transpose()
-
-        glUseProgram(modelProgram)
-        glBindVertexArray(vao) // bind vertex array to draw
-
-        //Vector3f(0f, 15.5f, 50f)
-        glUniform4f(cache[LIGHT_POSITION], 0f, 35.5f, 50f, 1f)
-        glUniform4f(cache[LIGHT_AMBIENT_COLOR], 0.46f, 0.46f, 0.46f, 1f)
-        glUniform4f(cache[LIGHT_DIFFUSE_COLOR], 0.83f, 0.83f, 0.83f, 1f)
-        glUniform4f(cache[LIGHT_SPECULAR_COLOR], 0.83f, 0.83f, 0.83f, 1f)
-
-        glUniform4f(cache[RED_CONIC_LIGHT_POSITION], redConicLightPosition.x, redConicLightPosition.y, redConicLightPosition.z, 1f)
-        glUniform4f(cache[RED_CONIC_LIGHT_DIRECTION], redConicLightDirection.x, redConicLightDirection.y, redConicLightDirection.z, 1f)
-        glUniform4f(cache[GREEN_CONIC_LIGHT_POSITION], greenConicLightPosition.x, greenConicLightPosition.y, greenConicLightPosition.z, 1f)
-        glUniform4f(cache[GREEN_CONIC_LIGHT_DIRECTION], greenConicLightDirection.x, greenConicLightDirection.y, greenConicLightDirection.z, 1f)
-        glUniform1f(cache[CONIC_LIGHT_CUTOFF], cos(Math.toRadians(9.0)).toFloat())
-
-        glUniform3f(cache[EYE_POSITION], lookAtEyePosition.x, lookAtEyePosition.y, lookAtEyePosition.z)
-
-        if (material != null) {
-            glUniform4f(
-                cache[MATERIAL_AMBIENT_COLOR],
-                material.ambientColor.x,
-                material.ambientColor.y,
-                material.ambientColor.z,
-                material.ambientColor.w
-            )
-            glUniform4f(
-                cache[MATERIAL_DIFFUSE_COLOR],
-                material.diffuseColor.x,
-                material.diffuseColor.y,
-                material.diffuseColor.z,
-                material.diffuseColor.w
-            )
-            glUniform4f(
-                cache[MATERIAL_SPECULAR_COLOR],
-                material.specularColor.x,
-                material.specularColor.y,
-                material.specularColor.z,
-                material.specularColor.w
-            )
-            glUniform1f(cache[MATERIAL_SHININESS], material.shininess)
-            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 0)
-        } else {
-            glUniform1i(cache[USE_PROCEDURAL_TEXTURE], 1)
-        }
-
-        if (texture != 0) {
-            glActiveTexture(GL_TEXTURE0)
-            glBindTexture(GL_TEXTURE_2D, texture)
-            glUniform1i(cache[TEX], 0)
-            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 1)
-        } else {
-            glUniform1i(cache[READ_TEXTURE_FROM_SAMPLER], 0)
-        }
-
-
-        val mvpData = BufferUtils.createFloatBuffer(16)
-        val nData = BufferUtils.createFloatBuffer(9)
-        val modelData = BufferUtils.createFloatBuffer(16)
-        mvp.get(mvpData)
-        n.get(nData)
-        model.get(modelData)
-        glUniformMatrix4fv(cache[UAName.MVP], false, mvpData) // pass MVP matrix to shader
-        glUniformMatrix3fv(cache[UAName.N], false, nData) // pass Normal matrix to shader
-        glUniformMatrix4fv(cache[UAName.MODEL], false, modelData) // pass model matrix to shader
-
-        glDrawArrays(GL_TRIANGLES, offset, count)
-
-        glBindTexture(GL_TEXTURE_2D, 0)
-        glBindVertexArray(0)
-        glUseProgram(0)
-    }
-
     private fun loadTexture(filename: String): Int {
         val image = ImageIO.read(Main::class.java.getResourceAsStream(filename))
         var pixels = (image.raster.dataBuffer as DataBufferByte).data
@@ -997,6 +1058,9 @@ class Main {
 
     private fun keyCallback(window: Long, key: Int, scancode: Int, action: Int, mods: Int) {
         if (action == GLFW_RELEASE) {
+            if (showMenu && key != GLFW_KEY_ESCAPE && key != GLFW_KEY_P) {
+                return
+            }
             when (key) {
                 GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true)
                 GLFW_KEY_ENTER -> {
@@ -1010,7 +1074,7 @@ class Main {
                         alSourcePlay(sourcePointer)
                         return
                     }
-                    if (userInputSequence.isValid()) {
+                    if (userInputSequence.currentUnsetPosition != 0 && userInputSequence.isValid()) {
                         val (from, to) = userInputSequence
                         if (game.move(from, to)) {
                             // valid move
@@ -1069,6 +1133,9 @@ class Main {
                     lookAtUp = Vector3f(0f, 1f, 0f)
                     viewChanged()
                 }
+                GLFW_KEY_P -> {
+                    showMenu = !showMenu
+                }
             }
         }
     }
@@ -1092,30 +1159,42 @@ class Main {
             .lookAt(lookAtEyePosition, lookAtCenter, lookAtUp)
     }
 
-    private fun mouseButtonCallback(window: Long, button: Int, action: Int, mods: Int) {
-//        if (action == GLFW_PRESS) {
-//            if (button == GLFW_MOUSE_BUTTON_1) {
-//                camera.updateMouseButton(Camera.Button.LEFT, true)
-//            } else if (button == GLFW_MOUSE_BUTTON_2) {
-//                camera.updateMouseButton(Camera.Button.RIGHT, true)
-//            }
-//        } else if (action == GLFW_RELEASE) {
-//            if (button == GLFW_MOUSE_BUTTON_1) {
-//                camera.updateMouseButton(Camera.Button.LEFT, false)
-//            } else if (button == GLFW_MOUSE_BUTTON_2) {
-//                camera.updateMouseButton(Camera.Button.RIGHT, false)
-//            }
-//        }
-    }
+    private fun mouseButtonCallback(window: Long, button: Int, action: Int, mods: Int) { }
 
-    private fun cursorPosCallback(window: Long, xpos: Double, ypos: Double) {
-//        camera.updateMousePosition(xpos, ypos)
-    }
+    private fun cursorPosCallback(window: Long, xpos: Double, ypos: Double) { }
 
     private fun windowSizeCallback(window: Long, width: Int, height: Int) {
         this.width = width
         this.height = height
         resized = true
+    }
+
+    private fun onUserInputSequenceChanged() {
+        if (userInputSequence.currentUnsetPosition == 0) {
+            // sequence is reset
+            greenConicLightPosition = Vector3f()
+            greenConicLightDirection = Vector3f()
+            redConicLightPosition = Vector3f()
+            redConicLightDirection = Vector3f()
+            useConicLights = false
+            return
+        }
+        val (from, to) = userInputSequence
+        val (greenPosition, greenDirection) = when (from) {
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+        }
+        greenConicLightPosition = greenPosition
+        greenConicLightDirection = greenDirection
+        val (redPosition, redDirection) = when (to) {
+            Position.LEFT -> Pair(Vector3f(-stickDistance, 45f, 0f), Vector3f(-stickDistance, 0f, 0f))
+            Position.CENTER -> Pair(Vector3f(0f, 45f, 0f), Vector3f(0f, 0f, 0f))
+            Position.RIGHT -> Pair(Vector3f(stickDistance, 45f, 0f), Vector3f(stickDistance, 0f, 0f))
+        }
+        redConicLightPosition = redPosition
+        redConicLightDirection = redDirection
+        useConicLights = true
     }
 
     private fun toBGRA(abgr: ByteArray): ByteArray {
@@ -1129,51 +1208,6 @@ class Main {
             i += 4
         }
         return bgra
-    }
-
-    private fun loadProgram(vertexShaderFile: String, fragmentShaderFile: String): Int {
-        // load vertex and fragment shaders (GLSL)
-        val vs = loadShader(vertexShaderFile, GL_VERTEX_SHADER)
-        val fs = loadShader(fragmentShaderFile, GL_FRAGMENT_SHADER)
-
-        // create GLSL program, attach shaders and compile it
-        val program = glCreateProgram()
-        glAttachShader(program, vs)
-        glAttachShader(program, fs)
-        glLinkProgram(program)
-
-        val status = glGetProgrami(program, GL_LINK_STATUS)
-        if (status == GL_FALSE) {
-            val log = glGetProgramInfoLog(program)
-            System.err.println(log)
-        }
-
-        return program
-    }
-
-    private fun loadShader(filename: String, shaderType: Int): Int {
-        val source = readAllFromResource(filename)
-        val shader = glCreateShader(shaderType)
-
-        // create and compile GLSL shader
-        glShaderSource(shader, source)
-        glCompileShader(shader)
-
-        // check GLSL shader compile status
-        val status = glGetShaderi(shader, GL_COMPILE_STATUS)
-        if (status == GL_FALSE) {
-            val log = glGetShaderInfoLog(shader)
-            System.err.println(log)
-        }
-
-        return shader
-    }
-
-    private fun readAllFromResource(resource: String): String {
-        return (javaClass.getResourceAsStream(resource) ?: throw IOException("Resource not found: $resource"))
-            .bufferedReader()
-            .lineSequence()
-            .joinToString(separator = "\n")
     }
 
     companion object {
